@@ -1,0 +1,3 @@
+- [GitHub: openai/codex](https://github.com/openai/codex)
+- [官方文档](https://developers.openai.com/codex)
+- [Reference](/docs/reference.md)

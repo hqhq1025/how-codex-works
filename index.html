@@ -1,0 +1,100 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <title>How Codex Works</title>
+  <meta name="description" content="OpenAI Codex CLI 源码架构导读">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/docsify-themeable@0/dist/css/theme-simple.css">
+  <style>
+    :root {
+      --base-font-size: 15px;
+      --theme-color: #0f766e;
+      --sidebar-width: 268px;
+      --sidebar-nav-link-color--active: #0f766e;
+      --sidebar-nav-link-border-color--active: #0f766e;
+      --code-theme-background: #f6f8fa;
+      --code-inline-background: #eef6f5;
+    }
+    .markdown-section {
+      max-width: 920px;
+    }
+    .markdown-section h1 {
+      border-bottom: 2px solid #0f766e;
+      padding-bottom: 0.25em;
+    }
+    .markdown-section table {
+      display: table;
+      width: 100%;
+    }
+    .markdown-section blockquote {
+      border-left-color: #0f766e;
+      background: #f3fbfa;
+      color: #334155;
+      padding: 0.75rem 1rem;
+    }
+    .mermaid {
+      text-align: center;
+      margin: 1.25rem 0;
+    }
+  </style>
+</head>
+<body>
+  <div id="app">加载文档中...</div>
+  <script src="https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.min.js"></script>
+  <script>
+    mermaid.initialize({ startOnLoad: false, theme: 'default' });
+
+    function escapeHtml(text) {
+      return text
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;');
+    }
+
+    window.$docsify = {
+      name: 'How Codex Works',
+      repo: 'hqhq1025/how-codex-works',
+      loadSidebar: true,
+      loadNavbar: true,
+      alias: {
+        '/.*/_sidebar.md': '/_sidebar.md',
+        '/.*/_navbar.md': '/_navbar.md'
+      },
+      subMaxLevel: 3,
+      auto2top: true,
+      search: {
+        paths: 'auto',
+        placeholder: '搜索',
+        noData: '没有结果'
+      },
+      markdown: {
+        renderer: {
+          code: function(code, lang) {
+            if (lang === 'mermaid') {
+              return '<div class="mermaid">' + escapeHtml(code) + '</div>';
+            }
+            return this.origin.code.apply(this, arguments);
+          }
+        }
+      },
+      plugins: [
+        function(hook, vm) {
+          hook.doneEach(function() {
+            if (window.mermaid) {
+              window.mermaid.run({ querySelector: '.mermaid' }).catch(function(error) {
+                console.warn('Mermaid render skipped:', error);
+              });
+            }
+          });
+        }
+      ]
+    };
+  </script>
+  <script src="https://cdn.jsdelivr.net/npm/docsify@4"></script>
+  <script src="https://cdn.jsdelivr.net/npm/docsify/lib/plugins/search.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/prismjs@1/components/prism-rust.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/prismjs@1/components/prism-toml.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/prismjs@1/components/prism-bash.min.js"></script>
+</body>
+</html>
