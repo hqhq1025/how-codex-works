@@ -138,6 +138,10 @@ graph TB
 
 ## 本地预览
 
+线上版本：
+
+[https://hqhq1025.github.io/how-codex-works/](https://hqhq1025.github.io/how-codex-works/)
+
 在项目目录运行：
 
 ```bash
