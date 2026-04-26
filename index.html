@@ -5,6 +5,9 @@
   <title>How Codex Works</title>
   <meta name="description" content="OpenAI Codex CLI 源码架构导读">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
+  <meta http-equiv="Pragma" content="no-cache">
+  <meta http-equiv="Expires" content="0">
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/docsify-themeable@0/dist/css/theme-simple.css">
   <style>
     :root {
@@ -57,6 +60,9 @@
       repo: 'hqhq1025/how-codex-works',
       loadSidebar: true,
       loadNavbar: true,
+      requestHeaders: {
+        'cache-control': 'no-cache'
+      },
       alias: {
         '/.*/_sidebar.md': '/_sidebar.md',
         '/.*/_navbar.md': '/_navbar.md'
@@ -64,8 +70,11 @@
       subMaxLevel: 3,
       auto2top: true,
       search: {
+        maxAge: 0,
+        namespace: 'how-codex-works-v2',
         paths: 'auto',
-        placeholder: '搜索',
+        depth: 6,
+        placeholder: '搜索全文',
         noData: '没有结果'
       },
       markdown: {
