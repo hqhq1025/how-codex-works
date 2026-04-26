@@ -4,6 +4,12 @@
 
 分析对象是公开仓库 [openai/codex](https://github.com/openai/codex)。当前核对的源码快照是 `87bc724`，提交日期 2026-04-25。仓库本身采用 Apache-2.0 许可证，这份文档采用 MIT 许可证。文档里的判断会尽量和源码路径放在一起，避免把推测写成事实。
 
+## 编写缘起
+
+这份导读由编者本人在进一步学习 harness、coding agent 和本地 agent runtime 的过程中整理而成。它的目标不是替代官方文档，而是把公开源码里的关键机制拆成更容易阅读、核对和复用的学习材料。
+
+项目以开源方式发布，希望能给同样想研究 Codex、harness 和 agent 架构的开发者提供便利。受限于时间、版本漂移和个人理解，内容难免有遗漏或错误；如果发现问题，欢迎通过 GitHub Issue 或 Pull Request 纠正、补充和讨论。
+
 ## 致谢与形态参考
 
 这个导读的项目形态参考了 [Windy3f3f3f3f/how-claude-code-works](https://github.com/Windy3f3f3f3f/how-claude-code-works)：中文源码导读、章节化拆解、架构图、资料来源和学习路线。这里借鉴的是教程组织方式和源码阅读密度，不照搬内容，也不把 Claude Code 的闭源内部机制作为 Codex 的事实来源。
