@@ -253,6 +253,7 @@ rg -n "trait SessionTask|GoalRuntimeEvent|RegularTask" codex-rs/core/src/tasks c
 | task 和 turn 有什么区别 | `codex-rs/core/src/tasks/mod.rs` | `codex-rs/core/src/tasks/regular.rs`、`codex-rs/core/src/session/turn.rs` |
 | goal 自动继续怎么避免并发 | `codex-rs/core/src/goals.rs` | `codex-rs/core/templates/goals/continuation.md` |
 | 公开资料里称道的功能如何回源码 | `codex-rs/README.md`、`codex-rs/exec/src/lib.rs`、`codex-rs/app-server/README.md` | `codex-rs/core/src/session/review.rs`、`codex-rs/core/src/compact.rs`、`codex-rs/core/src/codex_delegate.rs` |
+| 每个工具从哪里生成、由谁执行 | `codex-rs/tools/src/tool_registry_plan.rs`、`codex-rs/tools/src/tool_spec.rs` | `codex-rs/core/src/tools/spec.rs`、`codex-rs/core/src/tools/handlers/` |
 
 ## 深读检查清单
 

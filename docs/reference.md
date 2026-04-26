@@ -88,7 +88,7 @@
 | 首页、00、01 | 官方 README、`codex-rs/README.md`、`protocol_v1.md`、源码快照 |
 | 02 Agent Loop | `session/handlers.rs`、`session/turn.rs`、`protocol_v1.md`、社区 agent loop 笔记 |
 | 03 协议层 | `protocol.rs`、`protocol_v1.md`、app-server README |
-| 04 工具系统 | `tools/spec.rs`、`router.rs`、`registry.rs`、`orchestrator.rs`、MCP 官方文档 |
+| 04、19 工具系统与工具图鉴 | `tools/spec.rs`、`tool_registry_plan.rs`、`router.rs`、`registry.rs`、`orchestrator.rs`、MCP 官方文档、公开可见竞品工具体验 |
 | 05 Sandbox 与安全 | Sandbox 官方文档、`sandboxing`、`guardian`、`network-proxy`、exec policy |
 | 06、17 上下文压缩 | `compact.rs`、`compact_remote.rs`、`turn.rs`、compaction 社区文章 |
 | 07 MCP 与 App Server | app-server README、MCP 官方文档、`mcp-server`、`codex-mcp` |

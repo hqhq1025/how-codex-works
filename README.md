@@ -119,6 +119,7 @@ graph TB
 | 16 | [Task、Review 与 Goals](./docs/16-task-review-goals.md) | `SessionTask`、review/compact/undo/user_shell、goal runtime |
 | 17 | [上下文压缩深读](./docs/17-context-compaction-deep-dive.md) | pre-turn/mid-turn compact、remote compact、replacement history、`reference_context_item` |
 | 18 | [被称道的 Codex 特性深读](./docs/18-praised-features-deep-dive.md) | 公开资料里的亮点如何落到本地 runtime：开源、sandbox、exec、review、compaction、MCP、skills、subagents、worktrees |
+| 19 | [Codex 工具图鉴](./docs/19-tool-catalog-deep-dive.md) | 每个 tool 的用途、实现、设计原因、优劣和竞品对比 |
 | S | [源码索引与命令速查](./docs/source-index.md) | 核心概念、源码路径、命令、验证命令、按问题定位源码 |
 | R | [参考资料与来源](./docs/reference.md) | 官方文档、社区文章、媒体报道和资料可信度说明 |
 
@@ -136,7 +137,7 @@ graph TB
 
 想理解 Codex 的产品差异，先读 [Codex 为什么不一样](./docs/11-why-codex-feels-different.md)，再读 [被称道的 Codex 特性深读](./docs/18-praised-features-deep-dive.md)。前者从源码架构解释使用感，后者把官方资料和社区评价里的亮点逐个映射回 runtime。
 
-准备读更深的实现细节，直接进入 12-18 章。它们分别对应几个容易被普通教程略过的区域：结构化代码编辑、prompt/context 注入、hooks 扩展、多 agent 委托、task/goals 生命周期、上下文压缩、公开称道特性的源码机制。
+准备读更深的实现细节，直接进入 12-19 章。它们分别对应几个容易被普通教程略过的区域：结构化代码编辑、prompt/context 注入、hooks 扩展、多 agent 委托、task/goals 生命周期、上下文压缩、公开称道特性的源码机制、工具图鉴。
 
 ## 重要边界
 

@@ -26,6 +26,7 @@
   - [16. Task、Review 与 Goals](/docs/16-task-review-goals.md)
   - [17. 上下文压缩深读](/docs/17-context-compaction-deep-dive.md)
   - [18. 被称道的 Codex 特性深读](/docs/18-praised-features-deep-dive.md)
+  - [19. Codex 工具图鉴](/docs/19-tool-catalog-deep-dive.md)
 
 - **落地实现**
   - [10. 最小必要组件](/docs/10-minimal-components.md)
