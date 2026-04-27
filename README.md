@@ -1,8 +1,13 @@
 # How Codex Works
 
+![Source](https://img.shields.io/badge/Source-openai%2Fcodex-3157ff?style=flat-square&logo=github)
+![Snapshot](https://img.shields.io/badge/Snapshot-4f1d5f00-111827?style=flat-square)
+![Docs](https://img.shields.io/badge/Docs-20_chapters-0f766e?style=flat-square)
+![License](https://img.shields.io/badge/License-MIT-blue?style=flat-square)
+
 深入解读 OpenAI Codex CLI 的源码架构。这个项目不是安装手册，而是一份给工程师看的源码导读：Codex 如何把模型、工具、终端、权限、沙箱、MCP 和多前端体验组织成一个生产级 coding agent。
 
-分析对象是公开仓库 [openai/codex](https://github.com/openai/codex)。当前核对的源码快照是 `87bc724`，提交日期 2026-04-25。仓库本身采用 Apache-2.0 许可证，这份文档采用 MIT 许可证。文档里的判断会尽量和源码路径放在一起，避免把推测写成事实。
+分析对象是公开仓库 [openai/codex](https://github.com/openai/codex)。当前核对的源码快照是 [`4f1d5f00`](https://github.com/openai/codex/tree/4f1d5f00f0175e257ddc4a47746453edecb27017)，提交日期 2026-04-27，提交信息为 `Add Codex issue digest skill (#19779)`。仓库本身采用 Apache-2.0 许可证，这份导读采用 MIT 许可证。文档里的判断会尽量和源码路径放在一起，避免把推测写成事实。
 
 ## 编写缘起
 
@@ -67,6 +72,20 @@ graph TB
 
 第四层是产品化扩展。Codex 的特别之处不只是能跑命令。IDE、desktop、`exec`、MCP、skills、plugins、hooks、apps、memory、sub-agents 都会接到同一条协议和工具路径上。想理解它为什么用起来不像普通 demo，可以先读 [为什么 Codex 用起来不一样](./docs/11-why-codex-feels-different.md)。
 
+## 关键数据
+
+| 指标 | 数值 | 说明 |
+|------|------|------|
+| 源码快照 | `4f1d5f00` | 2026-04-27 的公开主分支快照 |
+| Rust workspace 清单 | 103 个 `Cargo.toml` | 包含核心、入口、安全、扩展、测试支撑和实验 crate |
+| Rust 源文件 | 1600+ 个 `.rs` | 反映 Codex 已经是本地 agent runtime，而不是单个 CLI 文件 |
+| `session/turn.rs` | 2200+ 行 | agent loop、采样、压缩、工具 follow-up 的主要交汇点 |
+| `compact.rs` | 500+ 行 | 本地压缩、replacement history、mid-turn initial context 注入 |
+| `hook_runtime.rs` | 600+ 行 | hook 事件、additional context、阻断与反馈路径 |
+| `tool_registry_plan.rs` | 600+ 行 | 每轮工具清单如何按配置、模型、MCP、dynamic tools 组装 |
+
+这些数字不是为了制造规模感，而是提醒读者：Codex 的价值不在“调用一次模型”，而在模型调用前后那一整套可恢复、可审计、可扩展的本地运行时。
+
 ## 关键发现
 
 读源码时最容易低估的是 Codex 的“胶水层”。模型请求和 shell 执行都不是最难的部分，真正撑起产品体验的是这些边界：
@@ -95,6 +114,21 @@ graph TB
 
 和很多源码解读不同，这里会尽量把“事实”和“判断”拆开写。事实来自 `openai/codex` 的公开源码、README 和 docs；判断会落到“这个设计值得学什么”“如果自己做 agent 要不要照抄”这类工程问题上。
 
+## 精品化阅读标准
+
+后续章节按同一套标准写。读者不需要先熟悉整个 Rust workspace，也不需要按文件顺序从头啃源码；每章都会从一个具体工程问题开始，再把问题落到源码路径、状态变化和失败路径上。
+
+| 标准 | 章节里会如何体现 |
+|------|------------------|
+| 先讲问题 | 每章先回答“为什么这个机制存在”，避免只列模块名 |
+| 再走调用链 | 用 Mermaid 和表格串起入口、关键函数、状态变化和输出事件 |
+| 写关键类型 | 不把类型名堆成索引，只解释它在链路里承担的边界 |
+| 写失败路径 | 压缩、审批、工具执行、hook、网络、MCP 都会写失败时怎么退 |
+| 写可复用启发 | 明确哪些设计适合最小 agent，哪些只适合生产化阶段 |
+| 写比较边界 | 和 Claude Code、Aider、Cursor、Cline/Roo 的比较只基于公开资料和可观察行为 |
+
+对标 [how-claude-code-works](https://github.com/Windy3f3f3f3f/how-claude-code-works) 时，重点学习的是它的源码阅读密度和教程组织方式：把复杂实现拆成可理解的工程方法，而不是把另一套产品的内部机制搬到 Codex 身上。
+
 ## 专题目录
 
 | # | 文档 | 你会看到什么 |
@@ -120,6 +154,7 @@ graph TB
 | 17 | [上下文压缩深读](./docs/17-context-compaction-deep-dive.md) | pre-turn/mid-turn compact、remote compact、replacement history、`reference_context_item` |
 | 18 | [被称道的 Codex 特性深读](./docs/18-praised-features-deep-dive.md) | 公开资料里的亮点如何落到本地 runtime：开源、sandbox、exec、review、compaction、MCP、skills、subagents、worktrees |
 | 19 | [Codex 工具图鉴](./docs/19-tool-catalog-deep-dive.md) | 每个 tool 的用途、实现、设计原因、优劣和竞品对比 |
+| 20 | [源码走读工作簿](./docs/20-source-reading-workbook.md) | 把核心机制拆成可执行的源码阅读练习 |
 | S | [源码索引与命令速查](./docs/source-index.md) | 核心概念、源码路径、命令、验证命令、按问题定位源码 |
 | R | [参考资料与来源](./docs/reference.md) | 官方文档、社区文章、媒体报道和资料可信度说明 |
 
@@ -138,6 +173,24 @@ graph TB
 想理解 Codex 的产品差异，先读 [Codex 为什么不一样](./docs/11-why-codex-feels-different.md)，再读 [被称道的 Codex 特性深读](./docs/18-praised-features-deep-dive.md)。前者从源码架构解释使用感，后者把官方资料和社区评价里的亮点逐个映射回 runtime。
 
 准备读更深的实现细节，直接进入 12-19 章。它们分别对应几个容易被普通教程略过的区域：结构化代码编辑、prompt/context 注入、hooks 扩展、多 agent 委托、task/goals 生命周期、上下文压缩、公开称道特性的源码机制、工具图鉴。
+
+## 读者画像
+
+| 读者 | 建议路线 |
+|------|----------|
+| 想做 coding agent 产品 | 先读 01-05，再读 10 和 19，重点看边界拆分和工具副作用控制 |
+| 想研究上下文压缩 | 直接读 06、13、17，再回到 02 看 pre-turn 和 mid-turn 在 loop 里的位置 |
+| 想给自己的工具接 MCP/插件 | 读 04、07、09、14、19，重点看工具清单如何动态生成 |
+| Codex 重度用户 | 读 08、11、18，理解 `codex`、`codex exec`、app-server、review、subagents 的共同底座 |
+| 想写 from-scratch agent | 读 10，然后按 02、03、04、05、06 补生产化能力 |
+
+## 更新记录
+
+| 日期 | 内容 |
+|------|------|
+| 2026-04-27 | 精品化改造：源码依据更新到 `4f1d5f00`，重组侧边栏，扩写核心运行时、上下文压缩、工具系统、hooks、多 agent、task/goals 和参考资料 |
+| 2026-04-26 | 增加工具图鉴、参考资料页、GitHub Pages 部署和 Codex 图标 |
+| 2026-04-25 | 初版 Docsify 站点，覆盖 agent loop、协议、工具、安全、MCP、context、customization 等主线 |
 
 ## 重要边界
 

@@ -2,14 +2,14 @@
 
 这一页只做源码阅读和命令核对：核心术语、关键路径、常用命令、验证命令、按问题定位源码。资料来源和外部参考集中放在 [参考资料与来源](./reference.md)。
 
-本版以 `openai/codex@87bc724` 为核对快照，提交日期 2026-04-25，提交信息为 `[codex] remove responses command (#19640)`。
+本版以 `openai/codex@4f1d5f00f0175e257ddc4a47746453edecb27017` 为核对快照，提交日期 2026-04-27，提交信息为 `Add Codex issue digest skill (#19779)`。
 
 ## 快速入口
 
 | 入口 | 用途 |
 |------|------|
 | [openai/codex](https://github.com/openai/codex) | 官方仓库 |
-| [核对源码快照：87bc724](https://github.com/openai/codex/tree/87bc72408c5ef08f8d21f2cdd00c55451c3be33f) | 本版文档对应的源码状态 |
+| [核对源码快照：4f1d5f00](https://github.com/openai/codex/tree/4f1d5f00f0175e257ddc4a47746453edecb27017) | 本版文档对应的源码状态 |
 | [Codex 官方文档](https://developers.openai.com/codex) | 产品与使用文档 |
 | [README.md](https://github.com/openai/codex/blob/main/README.md) | 安装、入口和产品边界 |
 | [codex-rs/README.md](https://github.com/openai/codex/blob/main/codex-rs/README.md) | Rust CLI 能力和 workspace 总览 |
@@ -31,7 +31,7 @@
 | `ToolRouter` | 把模型返回的 tool call 路由到内部工具 payload 和 handler | `codex-rs/core/src/tools/router.rs` |
 | `ToolRegistry` | 统一管理工具 spec、handler 和执行结果转换 | `codex-rs/core/src/tools/registry.rs` |
 | `ToolOrchestrator` | 工具执行边界，连接审批、hook、sandbox、升级执行 | `codex-rs/core/src/tools/orchestrator.rs` |
-| `apply_patch` | Codex 的结构化代码编辑工具，支持 patch 解析、预览、审批和执行 | `codex-rs/core/src/tools/handlers/apply_patch.rs` |
+| `apply_patch` | Codex 的结构化代码编辑工具，支持 patch 解析、预览、审批和执行 | `codex-rs/core/src/tools/runtimes/apply_patch.rs` |
 | `TurnDiffTracker` | 记录 turn 内文件基线和最终 unified diff | `codex-rs/core/src/turn_diff_tracker.rs` |
 | `ContextFragment` | 模型上下文片段，承载环境、权限、skills、plugins、hooks 等输入 | `codex-rs/core/src/context/fragment.rs` |
 | `HookRuntime` | 运行 hook、处理 block/approval/additional context | `codex-rs/core/src/hook_runtime.rs` |
@@ -150,7 +150,7 @@
 | `codex-rs/core/src/agents_md.rs` | AGENTS.md |
 | `codex-rs/config/src/config_requirements.rs` | 组织级配置约束 |
 | `codex-rs/core/src/config/` | core 配置结构和加载结果 |
-| `codex-rs/core/src/config_loader/` | 配置层合并 |
+| `codex-rs/core/src/config/config_loader_tests.rs` | 配置层合并的测试入口 |
 | `codex-rs/core/config.schema.json` | `config.toml` JSON Schema |
 
 ### Task、Goal 和多 agent

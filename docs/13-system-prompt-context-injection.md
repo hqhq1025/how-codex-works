@@ -349,3 +349,116 @@ rg -n "AGENTS.md|agents_md" codex-rs/core/src
 ```
 
 如果要追一次完整 prompt 构建，建议从 `codex-rs/core/src/session/turn.rs` 的 `run_turn` 开始，按调用顺序读到 model sampling request。
+
+## Codex 的 prompt 不是单层 system prompt
+
+Codex 当前快照下，模型指令来自多个层级：model instructions template、personality、collaboration mode、developer instructions、user instructions、context fragments、AGENTS.md、skills、plugins、apps、hooks additional context、environment/permissions context。它们不都在同一个 system 字符串里。
+
+```mermaid
+flowchart TB
+    A["model instructions template"] --> P["base instructions"]
+    B["personality template"] --> P
+    C["collaboration mode template"] --> P
+    D["developer / user instructions"] --> P
+    E["TurnContext"] --> F["context fragments"]
+    F --> G["developer messages"]
+    H["AGENTS.md"] --> G
+    I["skills / plugins / apps"] --> G
+    J["hooks additional context"] --> G
+    K["environment / permissions"] --> G
+    P --> M["model request"]
+    G --> M
+```
+
+这和单纯拼接 prompt 的 agent 不同。Codex 把长期稳定的模型行为、会话级风格、每轮环境、工具扩展、hook 反馈分开处理，后续压缩和恢复才能知道哪些内容需要重注入。
+
+## 模板路径
+
+| 内容 | 路径 |
+|------|------|
+| GPT-5.2 Codex 基础指令 | `codex-rs/core/templates/model_instructions/gpt-5.2-codex_instructions_template.md` |
+| friendly / pragmatic personality | `codex-rs/core/templates/personalities/` |
+| collaboration mode | `codex-rs/collaboration-mode-templates/templates/` |
+| compact prompt | `codex-rs/core/templates/compact/prompt.md` |
+| memory prompts | `codex-rs/core/templates/memories/` |
+| review history messages | `codex-rs/core/templates/review/` |
+| search tool descriptions | `codex-rs/core/templates/search_tool/` |
+
+这些模板说明 Codex 的 prompt 设计已经产品化：普通 coding、plan mode、pair programming、execute mode、memory agent、review、realtime backend 都有不同模板。
+
+## context fragment 如何进入 history
+
+`core/src/context/` 下的模块可以看成 prompt 零件库。比如 environment context 描述 cwd、sandbox、approval、时间和平台；permissions instructions 告诉模型当前能做什么；skill/plugin/app instructions 则把扩展能力按需注入。
+
+| fragment | 解决的问题 |
+|----------|------------|
+| `environment_context.rs` | 运行环境、cwd、sandbox、approval、日期等 |
+| `permissions_instructions.rs` | 当前权限和审批模式如何影响工具 |
+| `available_skills_instructions.rs` | 哪些 skills 可用，如何触发 |
+| `available_plugins_instructions.rs` | plugins 提供哪些能力 |
+| `apps_instructions.rs` | app connector mention 和使用规则 |
+| `hook_additional_context.rs` | hook 返回给模型的额外上下文 |
+| `model_switch_instructions.rs` | 模型切换时的提示 |
+
+`record_context_updates_and_set_reference_context_item` 会比较当前 turn context 和 reference context，再决定写入全量上下文还是增量更新。这是 prompt 稳定性和压缩恢复的交汇点。
+
+## AGENTS、skills、plugins 的边界
+
+| 机制 | 进入方式 | 适合放什么 |
+|------|----------|------------|
+| `AGENTS.md` | 项目路径发现后作为项目指令注入 | repo 约定、测试命令、代码风格 |
+| skills | `SKILL.md` metadata + 触发规则 + 可选资源 | 可复用能力、工作流、模板和脚本 |
+| plugins | 打包 skills、apps、MCP servers | 可分发扩展 |
+| apps/connectors | 显式 mention 或动态工具 | 外部系统操作能力 |
+
+不要把这些都当成“更多 prompt”。它们有不同加载时机、预算和安全边界。skills 可以懒加载，plugins 需要管理器发现，apps 常常通过 mention 或 connector 工具暴露，AGENTS 则跟 cwd 和项目层级绑定。
+
+## 和 Claude Code 系统提示词分析的区别
+
+`how-claude-code-works` 的系统提示词章节很强，因为它把可见提示词原文拆成行为规则。Codex 这边更适合写成“指令栈和上下文注入机制”：公开源码里能看到模板文件、context fragments 和 baseline 更新逻辑，重点不只是提示词写了什么，还包括它们什么时候进入 history、什么时候被压缩吃掉、什么时候重注入。
+
+## 逐段源码走读：base instructions
+
+模型基础指令来自 model provider/model info 和模板。当前快照里能看到 `gpt-5.2-codex_instructions_template.md`，也能看到 personality 模板。session 配置允许覆盖 base instructions、developer instructions、user instructions 和 compact prompt。
+
+| 层 | 变化频率 | 适合内容 |
+|----|----------|----------|
+| model instructions | 低 | agent 基本身份、工具使用原则、格式规则 |
+| personality | 低到中 | friendly、pragmatic、none 这类表达风格 |
+| collaboration mode | 中 | default、plan、execute、pair programming 等工作方式 |
+| developer/user instructions | 中 | 用户配置或当前 session 的长期偏好 |
+| turn context fragments | 高 | 当前 cwd、权限、工具、skills、hooks、环境 |
+
+```mermaid
+flowchart TB
+    A["ModelInfo"] --> B["base_instructions"]
+    C["personality"] --> B
+    D["collaboration mode"] --> B
+    E["session overrides"] --> B
+    B --> F["sampling request instructions"]
+```
+
+## 逐段源码走读：context updates
+
+`record_context_updates_and_set_reference_context_item` 是这一章的核心函数。它要做两件事：把当前上下文和 reference baseline 比较，把需要告诉模型的变化写进 history；然后把当前 turn context 保存成新的 reference。
+
+| baseline 状态 | 行为 |
+|---------------|------|
+| `None` | 说明缺 baseline，需要全量注入当前 initial context |
+| 有 baseline 且变化少 | 只写 settings/context update |
+| compact 清空 baseline | 下一轮重新全量注入 |
+| mid-turn compact 设置 baseline | 让 follow-up 不丢当前上下文 |
+
+这就是 Codex 能在压缩后继续工作的关键之一。压缩会改变 history，但模型仍需要知道当前权限、cwd、skills、plugins、apps、sandbox 和 realtime 状态。
+
+## prompt 注入的失败模式
+
+| 失败模式 | 后果 | 防线 |
+|----------|------|------|
+| 重复注入大量上下文 | prompt 成本高，缓存不稳定 | reference context |
+| 压缩吃掉项目规则 | 模型忘记 AGENTS 或工具边界 | full reinjection |
+| hook 输出被当成高优先级指令 | prompt injection 风险 | hook schema、additional context 边界 |
+| skills 全量加载 | 上下文爆炸 | skill metadata、触发规则、预算 |
+| plugin/app 工具全暴露 | tool schema 太大 | tool_search、dynamic tool、mention |
+
+如果自己做 agent，不要一开始做复杂 prompt cache，但要从第一天区分“长期行为指令”和“当前环境上下文”。前者尽量稳定，后者按变化注入。

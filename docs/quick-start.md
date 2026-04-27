@@ -134,3 +134,93 @@ Codex 用更多类型和模块换来更清楚的运行边界。`Submission` / `E
 ## 如果自己做 Agent，可以学什么
 
 先把输入输出协议、模型循环、工具运行时和安全策略分开。哪怕第一版只有 CLI，也不要让 UI 直接持有所有 agent 状态。这个边界一旦立住，后面接 TUI、HTTP、MCP 或桌面应用时，核心 loop 不需要重写。
+
+## 10 分钟读源码时抓哪几个断点
+
+Codex 的源码很大，快速读时不要从 crate 数量开始，也不要先看 TUI。最短路径是抓住四个断点，每个断点都能回答一个工程问题。
+
+| 断点 | 问题 | 入口 |
+|------|------|------|
+| 协议断点 | 外部输入怎么进入核心 | `codex-rs/protocol/src/protocol.rs` |
+| 任务断点 | 一次用户请求如何变成可中断任务 | `codex-rs/core/src/session/handlers.rs`、`codex-rs/core/src/tasks/` |
+| 采样断点 | 模型流、工具调用、follow-up 怎么循环 | `codex-rs/core/src/session/turn.rs` |
+| 副作用断点 | shell、patch、MCP、动态工具怎么被审批和执行 | `codex-rs/core/src/tools/`、`codex-rs/tools/src/` |
+
+```mermaid
+flowchart TB
+    A["protocol.rs<br/>Op / Submission / Event"] --> B["handlers.rs<br/>submission_loop"]
+    B --> C["tasks/<br/>SessionTask"]
+    C --> D["turn.rs<br/>run_turn"]
+    D --> E["ModelClient<br/>Responses stream"]
+    E --> F{"tool call?"}
+    F -->|yes| G["ToolRouter"]
+    G --> H["ToolRegistry"]
+    H --> I["ToolOrchestrator / runtimes"]
+    I --> J["history + rollout"]
+    J --> D
+    F -->|no| K["TurnComplete"]
+```
+
+这条线读通后，再看 app-server、TUI、exec、MCP server 就容易很多。它们不是几套 agent，而是不同外壳把请求转换成同一个核心协议。
+
+## Codex 和 demo agent 的真正差别
+
+很多 agent demo 只有一个 `messages` 数组和一个工具函数表。Codex 的源码显示，生产级 coding agent 至少要补六层。
+
+| 层级 | demo 常见写法 | Codex 的做法 |
+|------|---------------|--------------|
+| 输入 | 直接把用户文本塞进 messages | `Op::UserTurn` 带 cwd、模型、权限、sandbox、turn context |
+| 输出 | 函数返回字符串 | `EventMsg` 流式发 text、tool、approval、warning、error |
+| 工具 | `name -> function` 映射 | `ToolSpec -> Router -> Registry -> Handler -> Runtime` |
+| 安全 | prompt 里说不要乱跑命令 | approval、exec policy、Guardian、sandbox、network policy |
+| 长会话 | 历史太长就总结 | pre-turn/mid-turn compact、replacement history、reference context |
+| 扩展 | 手写几个插件 | MCP、dynamic tools、skills、plugins、hooks、apps、subagents |
+
+## 一轮 Codex 任务的最小心智模型
+
+可以把 Codex 的任务看成“可恢复的工具循环”。用户看到的是一条指令，内部看到的是一串 turn。每个 turn 可能调用模型一次，也可能因为工具结果需要继续而反复采样。
+
+```mermaid
+sequenceDiagram
+    participant UI as UI / exec / app-server
+    participant S as Session
+    participant T as SessionTask
+    participant M as Model
+    participant R as Tool runtime
+
+    UI->>S: Submission(Op::UserTurn)
+    S->>T: spawn RegularTask
+    T->>S: build TurnContext
+    T->>M: run_sampling_request
+    M-->>T: text / tool calls / completed
+    T->>R: dispatch tools
+    R-->>T: output items
+    T->>S: record history and rollout
+    T->>M: follow-up if needed
+    T-->>UI: EventMsg::TurnComplete
+```
+
+这里有两个容易忽略的点。一是 UI 不直接驱动模型，UI 只提交 `Submission`，再消费 `Event`。二是工具结果不是临时变量，而是会进入 history 和 rollout，后续压缩、恢复、审计都依赖这条记录。
+
+## 快速判断某个功能属于哪一层
+
+| 看到的能力 | 先去哪里找 |
+|------------|------------|
+| `/review`、compact、undo、user shell | `codex-rs/core/src/tasks/` |
+| prompt 里突然出现 AGENTS、skills、plugins | `codex-rs/core/src/context/` 和 `session/turn.rs` |
+| 模型能不能看到某个 tool | `codex-rs/tools/src/tool_registry_plan.rs` |
+| tool call 为什么被拒绝 | `core/src/tools/orchestrator.rs`、`hook_runtime.rs`、`exec_policy.rs` |
+| 线上 app 或 IDE 怎么同步状态 | `codex-rs/app-server/src/codex_message_processor.rs` |
+| 子 agent 怎么回传事件 | `codex-rs/core/src/codex_delegate.rs` 和 `core/src/tools/handlers/multi_agents_*` |
+
+这张表适合当源码调试入口。先按能力归层，再用 `rg` 查关键类型，比直接全仓库搜索某个 UI 文案更快。
+
+## 该不该照抄 Codex
+
+最小 agent 不需要一开始照抄 Codex 的全部结构，但有三件事越早做越省事。
+
+第一，输入输出协议要独立。哪怕第一版只支持 CLI，也可以先定义 `Submission` 和 `Event` 的简化版。后面接网页、IDE、任务队列时，核心 loop 不会被 UI 绑住。
+
+第二，工具副作用要集中管理。只要工具能写文件或跑命令，就不要让每个 handler 自己决定权限。把审批、沙箱、超时、输出上限放在统一 orchestrator 里，后续加 hook 和审计会轻很多。
+
+第三，长会话状态要分层。模型输入、事件日志、结构化索引、记忆不是一回事。可以先用 JSON 文件实现，但概念上不要混成一个 `messages` 数组。

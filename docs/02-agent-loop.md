@@ -225,3 +225,204 @@ Codex 没有把工具执行嵌在模型流处理里同步等待。它用 future 
 先不要急着做复杂 UI。把 agent loop 写成清楚的四段：收输入、构建 prompt、处理模型流、分发工具。只要 `needs_follow_up` 这个信号清晰，复杂工具和长任务都能自然接进去。
 
 同时要把控制消息和普通用户消息放到同一条可排序队列里。中断、审批、压缩都是 agent runtime 的一部分，不应该散落在 UI 回调里。
+
+## 源码级调用链
+
+`run_turn` 不是孤立函数，它只处在调用链中间。完整路径可以按三层看：
+
+| 层 | 关键函数 | 责任 |
+|----|----------|------|
+| 分发层 | `submission_loop`、`user_input_or_turn` | 从 queue 读取 `Submission`，把 `Op` 分流到任务、审批、配置、中断 |
+| 任务层 | `Session::start_task`、`SessionTask`、`RegularTask` | 让一次用户请求拥有可中断、可替换、可记录的生命周期 |
+| turn 层 | `run_turn`、`run_sampling_request`、`try_run_sampling_request` | 构建模型请求、消费流式事件、执行工具、判断是否 follow-up |
+
+```mermaid
+flowchart TB
+    A["Submission"] --> B["submission_loop"]
+    B --> C{"Op kind"}
+    C -->|UserTurn| D["user_input_or_turn"]
+    C -->|Interrupt / approval / answer| E["session control path"]
+    D --> F["Session::start_task"]
+    F --> G["RegularTask::run"]
+    G --> H["run_turn"]
+    H --> I["run_pre_sampling_compact"]
+    I --> J["record_context_updates_and_set_reference_context_item"]
+    J --> K["run_sampling_request"]
+    K --> L["try_run_sampling_request"]
+    L --> M{"tool calls or pending input?"}
+    M -->|yes| N["dispatch tools + record outputs"]
+    N --> K
+    M -->|no| O["TurnComplete"]
+```
+
+`submission_loop` 的重要性在于它把所有外部动作放进同一条顺序流。普通用户输入、审批答复、`request_user_input` 答案、中断、配置变更都不是 UI 回调里的临时状态，而是 core 可以统一处理的 `Op`。
+
+## run_turn 的四段结构
+
+当前源码里，`run_turn` 可以粗略拆成四段。
+
+| 阶段 | 发生什么 | 为什么需要 |
+|------|----------|------------|
+| turn 准备 | 构建 `TurnContext`，处理 pre-sampling compact | 模型请求前先保证上下文能放进窗口 |
+| 上下文注入 | 调 `record_context_updates_and_set_reference_context_item` | 把 AGENTS、skills、plugins、permissions 等变化写进 history |
+| 采样循环 | 调 `run_sampling_request`，消费 Responses stream | 让模型输出文本、tool call、reasoning、usage |
+| follow-up | 执行工具并把结果作为下一轮输入 | 模型通过工具结果继续判断，直到没有可继续内容 |
+
+```mermaid
+stateDiagram-v2
+    [*] --> Prepare
+    Prepare --> PreCompact: usage too high or model downshift
+    Prepare --> InjectContext
+    PreCompact --> InjectContext
+    InjectContext --> Sampling
+    Sampling --> ToolDispatch: tool calls
+    ToolDispatch --> RecordOutput
+    RecordOutput --> MidTurnCompact: usage high and follow-up needed
+    MidTurnCompact --> Sampling
+    RecordOutput --> Sampling: follow-up
+    Sampling --> Complete: no follow-up
+    Sampling --> Error: fatal stream/tool error
+    Complete --> [*]
+    Error --> [*]
+```
+
+## 采样层为什么还要拆成两个函数
+
+`run_sampling_request` 和 `try_run_sampling_request` 的分工容易被忽略。前者偏策略，处理重试、context window exceeded、usage 和上层错误；后者偏事件消费，真正读模型 stream，把 `ResponseEvent` 转成 history item、UI event 和工具调用。
+
+这种拆分的好处是错误恢复不污染流式事件解析。比如 prompt 太长时，上层可以决定是否 compact 或裁剪；流式解析层只负责保证事件顺序、tool call 收集和 output item 合法。
+
+## continue 的来源
+
+Codex 的 turn 不一定因为模型说完文本就结束。只要还有内容要喂回模型，就会继续。
+
+| 来源 | 例子 | 进入方式 |
+|------|------|----------|
+| 工具调用 | shell、apply_patch、MCP、view_image | 工具 output item 写回 history |
+| pending input | 用户在任务中追加 steer | 作为下一轮用户输入合并 |
+| API 非终止状态 | Responses API 表示还没 end turn | 保留 response 状态继续采样 |
+| compact 后续 | mid-turn compact 之后仍有任务要继续 | initial context 插回合适位置后重采样 |
+
+这个机制解释了 Codex 为什么不是“模型输出一次就结束”。coding agent 的一条用户指令经常对应多轮模型判断，每轮之间由工具结果连接。
+
+## interrupt 和失败路径
+
+中断不是简单 kill 当前 future。任务层要处理几件事：当前 task 要停止，history 里要能记录中断边界，工具进程和 approval 等待要解除，前端还要收到可理解的事件。
+
+| 失败或中断 | 处理目标 |
+|------------|----------|
+| 用户发 `Op::Interrupt` | 停止当前 task，保留已产生的历史和事件 |
+| 新 `UserTurn` 到达 | 旧 task 被打断，新 task 开始，避免两个 task 同时写 session |
+| stream 可重试错误 | 由 sampling 层重试，不把临时网络问题直接暴露为任务失败 |
+| `ContextWindowExceeded` | 触发 compact 或向上返回，让任务层决定 |
+| 工具被拒绝 | 记录拒绝结果，模型可以基于拒绝调整路径 |
+
+如果自己实现 agent，先不要追求复杂恢复策略，但至少要让中断成为协议事件，而不是 UI 层的临时布尔值。
+
+## 逐段源码走读：从 submission 到 turn
+
+这一段适合打开源码对照读。目标不是记住每个分支，而是看清每层只管自己的边界。
+
+### 1. `submission_loop` 只管取消息和分发
+
+`submission_loop` 位于 `codex-rs/core/src/session/handlers.rs`。它从 submission receiver 里拿到 `Submission`，根据 `Op` 类型调用不同 handler。它不负责模型采样，也不直接执行工具。
+
+| 分支 | 处理方式 |
+|------|----------|
+| `Op::UserTurn` / legacy input | 进入 `user_input_or_turn` |
+| approval answer | 唤醒等待中的工具执行 |
+| interrupt | 通知当前 task 停止 |
+| config/session 类操作 | 更新 session 或返回状态 |
+
+这个分层让审批答复和用户新输入都能按协议顺序进入 core。否则 UI 很容易在模型采样时直接改内部状态。
+
+### 2. `user_input_or_turn` 把输入变成任务
+
+`user_input_or_turn` 会处理用户输入、hook、pending input、任务替换等逻辑。它的重点不是调用模型，而是决定当前输入应该新开任务、打断旧任务，还是作为 pending input 进入已有任务。
+
+```mermaid
+flowchart TB
+    A["Op::UserTurn"] --> B["user_input_or_turn"]
+    B --> C["UserPromptSubmit hook"]
+    C --> D{"blocked?"}
+    D -->|yes| E["emit blocked feedback"]
+    D -->|no| F{"active task?"}
+    F -->|yes| G["interrupt or queue pending input"]
+    F -->|no| H["start RegularTask"]
+```
+
+这解释了一个产品体验：用户在 agent 工作中追加指令，不只是往 stdin 写一行，而是进入 task/turn 的控制逻辑。
+
+### 3. `RegularTask` 让普通对话成为任务
+
+`RegularTask` 在 `codex-rs/core/src/tasks/regular.rs`。普通用户输入并不是直接调 `run_turn`，而是由 task 包住。task 层负责发 `TurnStarted`、处理 pending input、把结果落进 history 和事件流。
+
+| task 层关心 | turn 层不该关心 |
+|-------------|-----------------|
+| 当前任务是否被 abort | UI 怎么展示中断 |
+| pending input 是否要合并 | 某个前端的快捷键 |
+| task 完成后如何发事件 | 工具内部怎么跑 shell |
+| 是否触发 stop hook 或 goal continuation | 模型 stream 的低层解析 |
+
+### 4. `run_turn` 是模型和工具的闭环
+
+`run_turn` 才是最接近 agent loop 的函数。它先处理压缩和上下文注入，再进入采样。采样产生的 tool call 会被路由、执行、写回 history；只要有 follow-up，就继续采样。
+
+```text
+run_turn
+  run_pre_sampling_compact
+  record_context_updates_and_set_reference_context_item
+  loop:
+    run_sampling_request
+    dispatch tool calls
+    record outputs
+    maybe mid-turn compact
+    break if no follow-up
+```
+
+这个伪代码比真实源码少很多分支，但能保留主线。读源码时可以先按这五个节点找，再展开每个节点的细节。
+
+## 逐段源码走读：采样层
+
+### 1. `run_sampling_request` 管策略
+
+`run_sampling_request` 会准备模型请求、处理重试、处理 `ContextWindowExceeded`，并把 token usage 和 response 状态交回 turn 层。它的职责更接近“跑一次采样请求直到有明确结果”。
+
+| 它负责 | 它不负责 |
+|--------|----------|
+| 调用 `try_run_sampling_request` | 解析每个 SSE 事件的具体内容 |
+| 判断是否重试 | 决定 tool handler 的内部逻辑 |
+| 把 context window 错误上抛 | 直接修改 UI |
+| 汇总 usage 和输出 | 直接执行 shell |
+
+### 2. `try_run_sampling_request` 管事件消费
+
+`try_run_sampling_request` 处理模型返回的 Responses stream。这里会看到 text delta、reasoning、tool call 参数、completed、error 等事件如何转成内部结构。
+
+```mermaid
+flowchart TB
+    A["Responses stream"] --> B{"event type"}
+    B -->|text delta| C["emit AgentMessageContentDelta"]
+    B -->|tool call delta| D["accumulate tool arguments"]
+    B -->|completed| E["finalize ResponseItem list"]
+    B -->|usage| F["record token usage"]
+    B -->|error| G["retryable or fatal error"]
+    D --> H["ToolCall list"]
+    E --> I["history items"]
+```
+
+这层的细节会影响 UI 速度。文本 delta 能尽早显示，tool call 参数能边流式边积累，工具执行就不必等到所有 UI 状态都结束后才开始准备。
+
+## 可复用的实现清单
+
+如果要从零实现一个小 agent，按下面顺序做比直接写 while loop 更稳。
+
+| 顺序 | 要实现的最小能力 | 验收方式 |
+|------|------------------|----------|
+| 1 | `Submission` / `Event` | UI 和 core 不互相调用内部函数 |
+| 2 | `SessionTask` | 同一时间只有一个写 history 的任务 |
+| 3 | `run_turn` | 文本回复和工具回复都能回到 history |
+| 4 | `needs_follow_up` | 多轮工具调用能自然继续 |
+| 5 | interrupt | 中断后 history 仍合法 |
+| 6 | context window error | 至少能给出清楚错误或触发简化 compact |
+| 7 | event log | 出错后能回放到最后一次状态 |

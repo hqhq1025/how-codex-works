@@ -4,7 +4,7 @@
 
 Codex 的工具系统不能只看 `ToolRouter` 和 `ToolOrchestrator`。真正影响使用体验的是每个工具的边界：哪些工具会产生副作用，哪些只是 UI 状态，哪些来自 MCP 或 app connector，哪些只在特定 feature 下出现，哪些是旧协议兼容层。
 
-这一章按 `openai/codex@87bc724` 的源码，把 Codex 当前模型可见工具拆成完整目录，并逐类回答四件事：
+这一章按 `openai/codex@4f1d5f00f0175e257ddc4a47746453edecb27017` 的源码，把 Codex 当前模型可见工具拆成完整目录，并逐类回答四件事：
 
 | 问题 | 解释 |
 |------|------|
@@ -500,3 +500,92 @@ rg -n "create_tool_search_tool|create_tool_suggest_tool|McpHandler|DynamicToolHa
 # 查多 agent 和 agent job
 rg -n "create_spawn_agent|create_wait_agent|spawn_agents_on_csv|report_agent_job_result" codex-rs/tools/src codex-rs/core/src/tools
 ```
+
+## current main 工具图鉴补充
+
+当前快照里，工具规格相关源码主要集中在 `codex-rs/tools/src/`，runtime 侧集中在 `codex-rs/core/src/tools/`。读工具时要同时看模型看到什么和实际谁执行。
+
+| 工具族 | spec 入口 | runtime/handler 入口 |
+|--------|-----------|----------------------|
+| shell / exec | `codex-rs/tools/src/local_tool.rs` | `codex-rs/core/src/tools/handlers/`、`codex-rs/core/src/unified_exec/` |
+| apply_patch | `codex-rs/tools/src/apply_patch_tool.rs`、`codex-rs/tools/src/tool_apply_patch.lark` | `codex-rs/core/src/tools/runtimes/apply_patch.rs` |
+| MCP | `codex-rs/tools/src/mcp_tool.rs`、`codex-rs/tools/src/mcp_resource_tool.rs` | `codex-rs/core/src/mcp_tool_call.rs`、`codex-rs/core/src/tools/handlers/` |
+| dynamic tools | `codex-rs/tools/src/dynamic_tool.rs` | `codex-rs/core/src/tools/handlers/dynamic.rs` |
+| tool_search | `codex-rs/tools/src/tool_discovery.rs` | `codex-rs/core/src/tools/handlers/tool_search.rs` |
+| plan/goals | `codex-rs/tools/src/plan_tool.rs`、`codex-rs/tools/src/goal_tool.rs` | `codex-rs/core/src/goals.rs` |
+| agents | `codex-rs/tools/src/agent_tool.rs`、`codex-rs/tools/src/agent_job_tool.rs` | `codex-rs/core/src/tools/handlers/multi_agents.rs`、`codex-rs/core/src/tools/handlers/multi_agents_v2.rs`、`codex-rs/core/src/tools/handlers/multi_agents_common.rs`、`codex-rs/core/src/codex_delegate.rs` |
+
+## 逐工具评价模板
+
+后续维护工具图鉴时，每个工具按同一套模板写，避免变成清单。
+
+| 字段 | 要回答的问题 |
+|------|--------------|
+| 做什么 | 模型为什么需要它 |
+| 怎么暴露 | function、namespace、freeform、local_shell、tool_search 还是 dynamic |
+| 怎么执行 | handler、runtime、approval、sandbox、hook 如何接入 |
+| 失败路径 | 参数错、权限拒绝、输出过大、进程未结束、MCP 错误如何反馈 |
+| 设计取舍 | 为什么不用更简单的工具形态 |
+| 竞品对比 | 只比较公开可见行为，不推断闭源内部 |
+
+## shell 工具族的细分价值
+
+| 工具 | 适合场景 | 不适合场景 |
+|------|----------|------------|
+| `shell` | 旧式 JSON command array、简单命令 | 长进程和交互 |
+| `shell_command` | 接近人类输入的一段 shell 字符串 | 需要精确 argv 控制时 |
+| `local_shell` | 模型/API 原生 local shell action | 不支持该 tool type 的模型 |
+| `exec_command` | 长进程、PTY、增量输出、session id | 极简单一次性命令略重 |
+| `write_stdin` | 给未结束进程输入或轮询 | 没有 session 的命令 |
+
+这类细分解释了 Codex 为什么不是只有一个 `run_command`。终端 agent 面对的不是单次命令，而是测试服务器、watcher、交互式命令、长输出、超时和分块读取。
+
+## 工具图鉴的判断边界
+
+工具优劣不能只看能不能完成任务。还要看 prompt 成本、安全边界、UI 展示、可恢复性和自动化语义。
+
+| 维度 | 好工具的表现 |
+|------|--------------|
+| prompt 成本 | schema 不该无节制膨胀，必要时走 tool_search |
+| 安全 | 能在执行前表达副作用范围 |
+| 可审查 | 输出和 diff 能被 UI 展示 |
+| 可恢复 | 结果能进入 history/rollout，resume 后仍可解释 |
+| 自动化 | headless 模式下不会卡死在不明确交互里 |
+
+## 每类工具的优劣总表
+
+| 工具族 | 优点 | 代价 | 适合照抄到最小 agent 吗 |
+|--------|------|------|--------------------------|
+| shell / exec | 覆盖面最大，能跑测试和构建 | 安全风险最高，输出和长进程复杂 | 需要，但先做最小安全线 |
+| apply_patch | 可审查、可审批、diff 清晰 | grammar 失败和大改动不友好 | 很适合，先简化实现 |
+| MCP | 扩展能力强，生态友好 | server 信任、schema 膨胀、认证复杂 | v0.3 以后再做 |
+| dynamic tools | 能让前端和 connector 提供能力 | 调试和权限边界更复杂 | 不适合 v0.1 |
+| tool_search | 降低 prompt 成本 | 模型需要先搜索再调用 | 工具很多时再做 |
+| plan/goals | 改善长任务可见性和继续能力 | 容易变成 UI 状态和真实状态不一致 | plan 可以早做，goals 晚做 |
+| subagents | 适合并行探索和验证 | 权限、冲突、成本、事件桥接复杂 | 不适合第一版 |
+| web/image | 增强外部知识和多模态 | prompt injection、版权、成本、渲染风险 | 按产品需求加 |
+
+## 和 Claude Code、Aider、Cline/Roo 的公开对比
+
+| 维度 | Codex | 其他产品公开可见行为 |
+|------|-------|----------------------|
+| 文件编辑 | `apply_patch` grammar、turn diff、approval 路径可源码核对 | Aider 强调 diff/patch；Claude Code、Cline/Roo 会展示文件编辑和 diff |
+| shell | unified exec、session id、stdin 写入、sandbox/approval | 多数工具支持 shell，但长进程和权限语义各不相同 |
+| MCP | MCP client 和 experimental MCP server 都在源码/文档里 | Claude Code、Cline/Roo 等也公开支持 MCP |
+| tool lazy loading | `tool_search` 和 deferred MCP/dynamic tools | 其他产品也有工具/技能发现，但内部机制不能直接推断 |
+| subagents | 作为受控工具进入父 session | Claude Code 公开有 subagent/agent 能力，内部边界不作为 Codex 事实 |
+
+这张表的目的不是排名，而是定位可学习点。Codex 的优势是很多工具边界能直接读源码，适合研究生产级 agent runtime。
+
+## 维护工具图鉴的核对清单
+
+新增工具或更新工具章节时，至少跑这些检查：
+
+```bash
+rg -n "create_.*tool" codex-rs/tools/src
+rg -n "ToolHandlerKind|register_handler" codex-rs/tools/src/tool_registry_plan.rs codex-rs/core/src/tools/spec.rs
+rg -n "tool_supports_parallel|supports_parallel_tool_calls" codex-rs/core/src/tools codex-rs/tools/src
+rg -n "run_pre_tool_use_hooks|run_post_tool_use_hooks" codex-rs/core/src/hook_runtime.rs
+```
+
+然后回答四个问题：模型是否能看到这个工具；runtime 是否有 handler；这个工具是否能产生副作用；失败时模型和用户分别看到什么。

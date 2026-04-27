@@ -278,3 +278,52 @@ rg -n "additional_context|HookAdditionalContext" codex-rs/core/src codex-rs/hook
 ```
 
 如果要判断某个 hook 能不能影响工具执行，优先看 `output_parser.rs`，它定义了外部脚本真正能返回什么。
+
+## hook 事件不都一样强
+
+Codex 当前 hook 体系里，事件能力不同。能阻断、能给模型加上下文、能参与权限决策，这三件事要分开。
+
+| 事件 | 能不能阻断 | 能不能加上下文 | 主要作用 |
+|------|------------|----------------|----------|
+| `SessionStart` | 部分场景可失败 | 可以 | 会话启动时给模型补环境或组织规则 |
+| `UserPromptSubmit` | 可以 block | 可以 | 用户输入进入模型前拦截或补上下文 |
+| `PreToolUse` | 可以 block / deny permission | 可以 | 工具执行前安全检查 |
+| `PermissionRequest` | 返回 allow/deny | 不作为主要上下文通道 | 参与审批决策 |
+| `PostToolUse` | 可以 block 后续 | 可以 | 工具执行后把反馈写回模型 |
+| `Stop` | 可以要求继续 | 可以通过 continuation prompt 影响后续 | turn 结束时做验证或要求补救 |
+
+```mermaid
+flowchart TB
+    A["UserPromptSubmit"] --> B["context before model"]
+    B --> C["Model emits tool call"]
+    C --> D["PreToolUse"]
+    D --> E{"block or deny?"}
+    E -->|yes| F["tool rejected output"]
+    E -->|no| G["PermissionRequest if needed"]
+    G --> H["Tool runtime"]
+    H --> I["PostToolUse"]
+    I --> J["additional context to history"]
+    J --> K["Stop"]
+    K --> L{"continue requested?"}
+    L -->|yes| B
+    L -->|no| M["turn complete"]
+```
+
+## additional context 是 hook 的关键价值
+
+`hook_runtime.rs` 会把 hook 返回的 `additional_context` 转成 developer message 记录进 history。它不是日志，而是模型后续能看到的上下文。
+
+这带来两个效果：一方面，hook 可以把外部检查结果反馈给模型，比如“测试失败，需要修复这些路径”；另一方面，hook 输出会进入 prompt，因此必须防 prompt injection，不能把不可信外部内容无脑提升为高优先级指令。
+
+## fail-closed 输出协议
+
+`hooks/src/engine/output_parser.rs` 对 hook 输出做了严格解析。比如 `PermissionRequest` 里 `updatedInput`、`updatedPermissions`、`interrupt:true` 目前是保留或不支持字段，出现就会被拒绝。`PreToolUse` 也不是想返回什么都可以，unsupported 字段会变成错误。
+
+| 设计 | 目的 |
+|------|------|
+| block 必须有非空 reason | UI 和模型需要知道为什么被挡 |
+| unsupported 字段 fail closed | 防止 hook 以未定义方式扩大权限 |
+| additional context 单独收集 | 避免 hook 文本和工具输出混在一起 |
+| matcher 按事件和工具名选择 | 避免所有 hook 都跑，降低延迟和误伤 |
+
+如果自己做 hooks，最小版本只需要 `pre_tool_use` 和 `post_tool_use`。前者负责挡风险，后者负责把检查结果反馈给模型。等需求稳定后再加 `stop` 和 `permission_request`。

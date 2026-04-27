@@ -2,7 +2,7 @@
 
 Codex 的代码编辑路径很值得单独拆出来看。很多 agent demo 会让模型直接写文件，或者把一段 shell 命令交给系统执行；Codex 把最常见的文件修改收敛到 `apply_patch` 这条路径上，让编辑行为在进入文件系统前就能被解析、预览、审批、追踪和回放。
 
-本章只讲公开源码里的本地 runtime，不讨论模型为什么选择某种 patch，也不讨论云端服务。对应快照为 `openai/codex@87bc724`。
+本章只讲公开源码里的本地 runtime，不讨论模型为什么选择某种 patch，也不讨论云端服务。对应快照为 `openai/codex@4f1d5f00f0175e257ddc4a47746453edecb27017`。
 
 ## 核心问题
 
@@ -358,3 +358,52 @@ rg -n "parse_patch_streaming|enum Hunk" codex-rs
 ```
 
 如果只想确认核心设计，优先看 `ApplyPatchHandler::handle` 和 `TurnDiffTracker::get_unified_diff`。
+
+## apply_patch 的公开接口和内部边界
+
+当前源码里，`apply_patch` 的工具规格在 `codex-rs/tools/src/apply_patch_tool.rs`，grammar 在 `codex-rs/tools/src/tool_apply_patch.lark`。它可以是 freeform tool，也可以是 JSON function tool，取决于模型和配置。
+
+| 形态 | 适用 | 代价 |
+|------|------|------|
+| freeform grammar | 模型直接输出 patch 文本 | 模型必须严格遵守 grammar |
+| JSON function | 模型把 patch 放入 JSON 字段 | 额外一层包装，适合不支持 freeform 的模型 |
+
+```mermaid
+flowchart TB
+    A["model emits apply_patch"] --> B["tool spec shape"]
+    B --> C{"freeform or JSON?"}
+    C -->|freeform| D["parse lark grammar"]
+    C -->|JSON| E["extract patch field"]
+    D --> F["patch actions"]
+    E --> F
+    F --> G["approval by path set"]
+    G --> H["runtime apply"]
+    H --> I["TurnDiffTracker"]
+```
+
+这里的核心不是“怎么把文本写进文件”，而是把编辑变成一个可解析、可预览、可审批、可恢复的 action 集合。shell 也能改文件，但 shell 改文件很难让 UI 在执行前展示结构化 diff。
+
+## patch 为什么适合 coding agent
+
+| 需求 | patch 的表现 |
+|------|--------------|
+| 可审查 | 每个文件的 add/update/delete 都能聚合成 diff |
+| 可拒绝 | 审批可以基于文件路径集合，而不是盯着一段 shell |
+| 可恢复 | turn diff 能从文件系统事实和 git object 重新计算 |
+| 可解释 | 前端能展示 patch apply progress 和最终 diff |
+| 可失败 | grammar 不合法或上下文不匹配时直接失败，不静默改错 |
+
+Codex 偏向 patch，不代表所有编辑都必须 patch。生成二进制、跑代码生成器、批量格式化、下载资源这些场景仍然适合 shell 或专用工具。patch 适合的是模型明确知道要改哪些文本的场景。
+
+## 和 search-and-replace 的取舍
+
+Claude Code 公开体验里常见精确编辑工具，Aider 也长期强调 diff/patch 形态。Codex 的 `apply_patch` 更像“受控 diff 提交”：它不要求工具自己理解代码语义，只要求编辑格式可解析。
+
+| 方案 | 优点 | 风险 |
+|------|------|------|
+| 全文件重写 | 简单，适合小文件 | 容易误删未关注内容，diff 噪声大 |
+| search-and-replace | 精确，抗行号漂移 | 需要 old string 唯一且匹配 |
+| unified patch / apply_patch | 可审查，适合多文件小改 | 大范围重构时 patch 容易失配 |
+| AST 编辑 | 语义强 | 语言覆盖和工程成本高 |
+
+最小 agent 可以先实现 search-and-replace 或 unified diff。生产化后再考虑 Codex 这种 freeform grammar + approval + turn diff 的链路。

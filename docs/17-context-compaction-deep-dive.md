@@ -467,3 +467,124 @@ rg -n "reference_context_item|normalize_history|remove_first_item" codex-rs/core
 2. `turn.rs` 里 post sampling token usage 后的 mid-turn compact 分支
 3. `compact.rs` 的 `run_compact_task_inner_impl`
 4. `compact_remote.rs` 的 `process_compacted_history`
+
+## current main 里值得新增的压缩细节
+
+当前快照的 `compact.rs` 有一段注释直接点明 mid-turn compact 的语义问题：不能把 compaction summary 放在 history 最后，因为模型会把它当成最新用户意图；因此需要把 initial context 插到最后真实用户消息或 summary 之前。这个设计比普通“总结历史并追加一条消息”更精细。
+
+```mermaid
+flowchart TB
+    A["before compact history"] --> B["compact request"]
+    B --> C["summary"]
+    C --> D["build replacement history"]
+    D --> E{"phase"}
+    E -->|PreTurn / Standalone| F["summary + recent user messages"]
+    E -->|MidTurn| G["insert initial context before last real user or summary"]
+    F --> H["replace_compacted_history"]
+    G --> H
+    H --> I["reference_context_item updated or cleared"]
+```
+
+## remote compact 的过滤意义
+
+`compact_remote.rs` 的 `process_compacted_history` 会处理 provider 返回的 compacted history。它不是盲信远端结果，而是要把 history 重新整理成 Codex runtime 能接受的形态，比如清理不该保留的 role、重注入初始上下文、保证最后的 compaction item 位置符合语义。
+
+| 风险 | 过滤或处理目标 |
+|------|----------------|
+| 远端返回 stale developer instructions | 用当前 initial context 替换 |
+| 返回非 user/developer 内容 | 避免污染模型历史 |
+| mid-turn summary 位置不对 | 保持当前用户意图仍是任务继续点 |
+| 模型切换后上下文不完整 | 重注入 model switch message |
+
+这说明 Codex 把 remote compact 当 provider 能力，而不是把历史控制权交给 provider。
+
+## 压缩后的可恢复性来自 rollout
+
+`replace_compacted_history` 会写入 `RolloutItem::Compacted`。这使 resume 和 rollback 能知道 history 不是自然增长到现在，而是发生过一次替换。`rollout_reconstruction_tests.rs` 里有大量测试覆盖 reference context、rollback、incomplete compaction metadata 等边界。
+
+```mermaid
+sequenceDiagram
+    participant C as compact task
+    participant S as Session
+    participant H as History
+    participant R as Rollout
+    participant Re as Reconstruction
+
+    C->>S: replace_compacted_history(items, reference_context_item, compacted_item)
+    S->>H: replace history
+    S->>R: persist RolloutItem::Compacted
+    Re->>R: replay rollout
+    Re->>H: rebuild compacted history and reference context
+```
+
+如果自己做 agent，压缩结果必须进入事件日志。否则用户恢复会话时只能看到压缩后的数组，不知道什么时候、为什么、用什么摘要替换了历史。
+
+## Codex 和 Claude Code 压缩对比的边界
+
+公开资料里，Claude Code 的上下文工程常被描述为多级压缩、缓存和恢复机制。Codex 这里能确定的是公开源码中的状态替换协议：pre-turn、mid-turn、remote compact、reference context、replacement history、rollout reconstruction、memory phase1/phase2。
+
+| 维度 | Codex 可源码确认 | 其他产品比较时的写法 |
+|------|------------------|----------------------|
+| 触发时机 | `turn.rs` 中 pre-sampling 和 mid-turn | 只能说公开资料或可见体验显示会自动压缩 |
+| history 替换 | `replace_compacted_history` | 不推断闭源内部是否同样替换 |
+| 初始上下文重注入 | `InitialContextInjection` 和 tests | 只比较“长会话能继续”的体验 |
+| 记忆系统 | `core/src/memories/README.md` 两阶段 pipeline | 不把记忆和压缩混用 |
+
+这章最值得学的是状态边界，而不是某个摘要 prompt。摘要 prompt 可以改，history replacement 和 baseline 语义才是长会话稳定的核心。
+
+## 逐段源码走读：`compact.rs`
+
+`compact.rs` 的主线可以按下面顺序读。
+
+| 顺序 | 函数或常量 | 读它是为了什么 |
+|------|------------|----------------|
+| 1 | `InitialContextInjection` | 明白 pre-turn/manual 和 mid-turn 的差异 |
+| 2 | `run_inline_compact_task` / `run_compact_task` | 看不同 compact phase 如何进入同一实现 |
+| 3 | `run_compact_task_inner_impl` | 看 summary 请求、错误重试、replacement history 构造 |
+| 4 | `collect_user_messages` | 看为什么最近用户原话要保留 |
+| 5 | `build_compacted_history` | 看 summary 和 recent user messages 如何组合 |
+| 6 | `insert_initial_context_before_last_real_user_or_summary` | 看 mid-turn 语义边界 |
+
+```mermaid
+flowchart TB
+    A["clone history"] --> B["append compact prompt"]
+    B --> C["sample summary"]
+    C --> D{"ContextWindowExceeded?"}
+    D -->|yes| E["remove oldest valid item and retry"]
+    D -->|no| F["SUMMARY_PREFIX + suffix"]
+    E --> B
+    F --> G["collect recent user messages"]
+    G --> H["build_compacted_history"]
+    H --> I{"inject initial context?"}
+    I -->|yes| J["insert before last real user or summary"]
+    I -->|no| K["use compacted history"]
+    J --> L["replace_compacted_history"]
+    K --> L
+```
+
+## 逐段源码走读：`compact_remote.rs`
+
+remote compact 的重点不是“远端更聪明”，而是 Codex 如何把远端结果重新收回本地 runtime 语义。
+
+| 读点 | 问题 |
+|------|------|
+| `should_use_remote_compact_task` | 哪些 provider 能走 remote compact |
+| remote request 构造 | provider 接收什么历史 |
+| `process_compacted_history` | 返回 history 怎么过滤、替换和重注入 |
+| tests | stale developer、non-user content、model switch、last real user 这些边界怎么保证 |
+
+如果 remote compact 输出不能满足 Codex 的 history 语义，宁愿过滤和重注入，也不能让 provider 的输出直接成为长期 history。
+
+## compact prompt 的位置
+
+`core/templates/compact/prompt.md` 负责告诉模型生成 handoff summary。`summary_prefix.md` 则让后续模型知道这段内容是 compaction summary。prompt 质量当然重要，但它不是唯一保障。
+
+| 层 | 作用 |
+|----|------|
+| prompt | 要求摘要覆盖当前任务、进展、约束、下一步 |
+| summary prefix | 标记这不是普通用户请求 |
+| replacement history | 把 summary 放进合法 history |
+| initial context injection | 保留当前 runtime 上下文 |
+| rollout item | 让恢复和回放知道发生过 compact |
+
+这五层合在一起，才是 Codex 压缩值得学的部分。

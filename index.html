@@ -50,6 +50,42 @@
       border-radius: 16px;
       box-shadow: 0 10px 28px rgba(49, 87, 255, 0.18);
     }
+    [data-theme="dark"] {
+      --base-background-color: #101421;
+      --base-color: #d8deea;
+      --theme-color: #88a2ff;
+      --heading-color: #f4f7fb;
+      --heading-h1-color: #f4f7fb;
+      --heading-h1-border-color: #88a2ff;
+      --sidebar-background: #0b1020;
+      --sidebar-border-color: #202944;
+      --sidebar-name-color: #f4f7fb;
+      --sidebar-nav-link-color: #bac4d8;
+      --sidebar-nav-link-color--active: #9eb1ff;
+      --sidebar-nav-link-background--active: rgba(136, 162, 255, 0.12);
+      --sidebar-nav-link-border-color--active: #88a2ff;
+      --code-theme-background: #151b2d;
+      --code-inline-background: #1d2742;
+      --code-inline-color: #b9c7ff;
+      --blockquote-background: rgba(136, 162, 255, 0.08);
+      --blockquote-border-color: #88a2ff;
+      --table-head-background: #151b2d;
+      --table-row-even-background: #11182a;
+      --search-background: #0b1020;
+      --search-input-background-color: #151b2d;
+      --search-input-color: #d8deea;
+    }
+    [data-theme="dark"] .app-name .app-name-link {
+      color: #f4f7fb;
+    }
+    [data-theme="dark"] .markdown-section h1 {
+      border-bottom-color: #88a2ff;
+    }
+    [data-theme="dark"] .markdown-section blockquote {
+      background: rgba(136, 162, 255, 0.08);
+      border-left-color: #88a2ff;
+      color: #c9d2e7;
+    }
     .markdown-section {
       max-width: 920px;
     }
@@ -71,9 +107,68 @@
       text-align: center;
       margin: 1.25rem 0;
     }
+    .reading-progress {
+      position: fixed;
+      top: 0;
+      left: 0;
+      width: 0%;
+      height: 3px;
+      background: linear-gradient(90deg, #3157ff, #88a2ff);
+      z-index: 10000;
+      transition: width 0.1s linear;
+    }
+    .top-controls {
+      position: fixed;
+      top: 12px;
+      right: 88px;
+      z-index: 9999;
+      display: flex;
+      gap: 8px;
+      align-items: center;
+    }
+    .theme-toggle,
+    .back-to-top {
+      border: 1px solid #3157ff;
+      background: #fff;
+      color: #3157ff;
+      cursor: pointer;
+      box-shadow: 0 4px 16px rgba(49, 87, 255, 0.12);
+    }
+    .theme-toggle {
+      min-width: 34px;
+      height: 34px;
+      border-radius: 999px;
+      font-size: 14px;
+    }
+    .back-to-top {
+      position: fixed;
+      right: 24px;
+      bottom: 28px;
+      width: 40px;
+      height: 40px;
+      border-radius: 999px;
+      opacity: 0;
+      visibility: hidden;
+      transition: opacity 0.2s ease, transform 0.2s ease;
+    }
+    .back-to-top.visible {
+      opacity: 1;
+      visibility: visible;
+    }
+    [data-theme="dark"] .theme-toggle,
+    [data-theme="dark"] .back-to-top {
+      background: #151b2d;
+      border-color: #88a2ff;
+      color: #d8deea;
+    }
   </style>
 </head>
 <body>
+  <div class="reading-progress" aria-hidden="true"></div>
+  <div class="top-controls">
+    <button class="theme-toggle" type="button" aria-label="切换暗色模式" title="切换暗色模式">◐</button>
+  </div>
+  <button class="back-to-top" type="button" aria-label="回到顶部" title="回到顶部">↑</button>
   <div id="app">加载文档中...</div>
   <script src="https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.min.js"></script>
   <script>
@@ -127,10 +222,45 @@
                 console.warn('Mermaid render skipped:', error);
               });
             }
+            updateReadingProgress();
           });
         }
       ]
     };
+
+    function applyTheme(theme) {
+      if (theme === 'dark') {
+        document.documentElement.setAttribute('data-theme', 'dark');
+      } else {
+        document.documentElement.removeAttribute('data-theme');
+      }
+      localStorage.setItem('how-codex-works-theme', theme);
+    }
+
+    function updateReadingProgress() {
+      var doc = document.documentElement;
+      var scrollTop = doc.scrollTop || document.body.scrollTop;
+      var scrollHeight = doc.scrollHeight - doc.clientHeight;
+      var progress = scrollHeight > 0 ? Math.min(100, Math.max(0, scrollTop / scrollHeight * 100)) : 0;
+      var bar = document.querySelector('.reading-progress');
+      var back = document.querySelector('.back-to-top');
+      if (bar) bar.style.width = progress + '%';
+      if (back) back.classList.toggle('visible', scrollTop > 500);
+    }
+
+    document.addEventListener('DOMContentLoaded', function() {
+      applyTheme(localStorage.getItem('how-codex-works-theme') || 'light');
+      document.querySelector('.theme-toggle').addEventListener('click', function() {
+        var dark = document.documentElement.getAttribute('data-theme') === 'dark';
+        applyTheme(dark ? 'light' : 'dark');
+      });
+      document.querySelector('.back-to-top').addEventListener('click', function() {
+        window.scrollTo({ top: 0, behavior: 'smooth' });
+      });
+      window.addEventListener('scroll', updateReadingProgress, { passive: true });
+      window.addEventListener('resize', updateReadingProgress);
+      updateReadingProgress();
+    });
   </script>
   <script src="https://cdn.jsdelivr.net/npm/docsify@4"></script>
   <script src="https://cdn.jsdelivr.net/npm/docsify/lib/plugins/search.min.js"></script>

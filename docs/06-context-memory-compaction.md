@@ -327,3 +327,82 @@ Codex 选择了相对明确的状态分层。代价是模块多，数据在 hist
 从第一天就区分三种存储：模型输入、事件日志、结构化索引。哪怕最小版本只用文件，也要避免把所有东西都塞进一个 `messages.json`。
 
 压缩要谨慎。先实现可恢复的事件日志，再实现历史裁剪和摘要。否则压缩出了问题，用户和开发者都没法知道上下文是怎么坏掉的。
+
+## 上下文工程的四个对象
+
+Codex 的上下文工程不是一个 prompt 字符串，而是四个对象协作。
+
+| 对象 | 作用 | 典型源码 |
+|------|------|----------|
+| `TurnContext` | 当前轮的运行环境快照 | `core/src/session/turn_context.rs` |
+| `ResponseItem` history | 模型真正能看到的消息历史 | `core/src/context_manager/history.rs` |
+| `reference_context_item` | 上一次已注入上下文的 baseline | `Session::record_context_updates_and_set_reference_context_item` |
+| rollout/state DB | 恢复、索引、记忆和审计 | `rollout`、`state`、`thread-store` |
+
+```mermaid
+flowchart TB
+    A["TurnContext"] --> B["context fragments"]
+    B --> C["developer / user / tool items"]
+    C --> D["ContextManager history"]
+    D --> E["model request"]
+    D --> F["rollout"]
+    F --> G["resume / rollback"]
+    D --> H["memory pipeline"]
+```
+
+`reference_context_item` 是读 Codex 上下文时最值得盯住的字段。它让 Codex 知道哪些环境信息已经注入过，哪些变化需要以增量形式写入 history。没有这个 baseline，系统只能每轮重复塞完整上下文，或者冒险漏掉环境变化。
+
+## 压缩不是记忆
+
+压缩和记忆都在减少上下文压力，但它们解决的问题不同。
+
+| 机制 | 输入 | 输出 | 生命周期 |
+|------|------|------|----------|
+| compact | 当前线程 history | replacement history 或 remote compacted history | 服务当前 thread 继续跑 |
+| memory phase 1 | 最近 rollout | per-rollout raw memory 和 summary | 后台抽取 |
+| memory phase 2 | phase 1 输出集合 | 文件系统 memory artifacts 和 consolidated memory | 跨线程复用 |
+
+Codex 的 `core/src/memories/README.md` 明确把 memory pipeline 分成两阶段：Phase 1 从符合条件的 rollout 中抽取结构化 memory；Phase 2 串行做全局整合，把结果同步到 memories 目录，并通过专用 consolidation agent 更新高层记忆。它不是当前 turn 的紧急压缩机制。
+
+## 上下文更新的实际顺序
+
+每一轮进入模型前，Codex 会先处理压缩，再记录上下文变化。
+
+```mermaid
+sequenceDiagram
+    participant T as run_turn
+    participant C as Compact
+    participant S as Session
+    participant H as History
+    participant M as Model
+
+    T->>C: run_pre_sampling_compact
+    C-->>T: compacted or skipped
+    T->>S: record_context_updates_and_set_reference_context_item
+    S->>H: append settings/context update items
+    S->>S: update reference_context_item
+    T->>M: sampling request with refreshed history
+```
+
+这个顺序很关键。压缩可能清空或替换 reference context，随后上下文注入会根据新的 baseline 决定是否全量重注入。
+
+## 失败路径
+
+| 场景 | 风险 | Codex 的处理方向 |
+|------|------|------------------|
+| compact 请求本身超窗 | 连摘要请求都放不进模型 | 从临时 history 移除旧 item，保留合法 tool pair |
+| remote compact 返回非 user/developer 内容 | 压缩结果污染 history | `process_compacted_history` 过滤和重注入 |
+| baseline 丢失 | 后续 turn 缺环境上下文 | full reinjection |
+| rollout 恢复遇到 compact | history 和 reference context 要重建 | rollout reconstruction tests 覆盖 |
+| memory 后台失败 | 不应阻塞当前任务 | DB lease、retry backoff、phase2 串行 |
+
+这也是 Codex 压缩看起来比普通摘要稳的原因：它围绕 history 合法性和 runtime baseline 做恢复，而不是只追求摘要文本质量。
+
+## 可核对命令
+
+```bash
+rg -n "record_context_updates_and_set_reference_context_item|reference_context_item" codex-rs/core/src/session codex-rs/core/src/context_manager
+rg -n "run_pre_sampling_compact|run_compact_task|InitialContextInjection" codex-rs/core/src/session/turn.rs codex-rs/core/src/compact.rs
+rg -n "Phase 1|Phase 2|startup memory|selected_for_phase2" codex-rs/core/src/memories
+rg -n "RolloutItem::Compacted|rollout_reconstruction" codex-rs/core/src/session codex-rs/core/src/rollout.rs
+```

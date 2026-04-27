@@ -208,3 +208,171 @@ Codex 把工具系统拆得比较细，初读时会觉得绕：router、registry
 工具系统至少要分成两层：工具识别和工具执行。识别层把模型输出变成内部调用，执行层做权限和副作用控制。
 
 如果 agent 能写文件或跑 shell，就再加第三层 orchestrator。不要让每个工具自己决定要不要问用户、要不要进沙箱、失败后能不能重试。这些规则应该在一个地方统一。
+
+## 工具系统的五段流水线
+
+Codex 的工具系统可以按五段读，而不是只看 `ToolRouter`。
+
+```mermaid
+flowchart TB
+    A["ToolsConfig"] --> B["build_tool_registry_plan"]
+    B --> C["ToolSpec list"]
+    B --> D["ToolHandlerKind list"]
+    C --> E["ToolRegistryBuilder"]
+    D --> E
+    E --> F["ToolRouter"]
+    F --> G["ToolCall"]
+    G --> H["ToolRegistry"]
+    H --> I["ToolHandler"]
+    I --> J["ToolOrchestrator / Runtime"]
+    J --> K["Tool output item"]
+```
+
+| 段 | 源码 | 关键问题 |
+|----|------|----------|
+| 组装 | `codex-rs/tools/src/tool_registry_plan.rs` | 当前 turn 让模型看到哪些工具 |
+| 注册 | `codex-rs/core/src/tools/spec.rs` | 每个 spec 对应哪个 handler |
+| 路由 | `codex-rs/core/src/tools/router.rs` | 模型返回的 item 怎么变成内部 `ToolCall` |
+| 执行 | `codex-rs/core/src/tools/registry.rs` | handler 如何被调用，hook 如何接入 |
+| 编排 | `codex-rs/core/src/tools/orchestrator.rs` | approval、sandbox、retry、输出事件如何统一处理 |
+
+这五段拆开后，很多现象会变清楚：模型可见工具和 runtime 可执行能力不完全等价；MCP 工具和内置工具最终共享执行管道；动态工具可以晚一点被发现，但一旦加载，也要被转成 `ToolSpec` 和 handler。
+
+## 工具清单为什么每轮生成
+
+`build_tool_registry_plan` 的输入不只是配置文件。它还会看模型能力、feature flag、shell 类型、是否有本地环境、MCP 工具、deferred tools、dynamic tools、collab tools、goal tools、code mode 等。
+
+| 输入 | 会影响什么 |
+|------|------------|
+| `has_environment` | 是否暴露 shell、apply_patch、view_image、list_dir 等本地工具 |
+| `shell_type` | 暴露 `shell`、`shell_command`、`local_shell` 或 unified exec |
+| `apply_patch_tool_type` | 用 freeform grammar 还是 JSON function |
+| `mcp_tools` / `deferred_mcp_tools` | 直接暴露 namespace，或通过 `tool_search` 延迟加载 |
+| `dynamic_tools` | app/connector/runtime 动态提供工具 |
+| `multi_agent_v2` | 决定子 agent 工具形态和提示 |
+| `goal_tools` | 决定是否暴露 goal runtime 工具 |
+
+这种动态组装会增加阅读难度，但它解决了一个真实问题：同一个 Codex 可能运行在 CLI、desktop、IDE、headless、不同模型、不同权限环境里。固定工具表会让不该出现的工具进入 prompt，也会浪费上下文。
+
+## 并发控制的边界
+
+Codex 支持并行工具调用，但不是所有工具都能并行。`ToolRouter` 会根据 spec 和配置判断工具是否支持 parallel；`core/src/tools/parallel.rs` 再用读写锁一类的机制控制执行。
+
+```mermaid
+flowchart LR
+    A["model emits N tool calls"] --> B["ToolRouter::tool_supports_parallel"]
+    B --> C{"parallel safe?"}
+    C -->|yes| D["run with shared/read guard"]
+    C -->|no| E["run with exclusive/write guard"]
+    D --> F["collect outputs"]
+    E --> F
+    F --> G["append tool outputs in model-consumable form"]
+```
+
+原则很简单：读世界可以并行，改世界要串行或经过更强约束。这个原则比具体实现更值得照抄。
+
+## tool_search 的意义
+
+`tool_search` 不只是搜索框。它是上下文预算机制。MCP、apps、connectors、dynamic tools 可能很多，如果全部展开给模型，工具 schema 会占掉大量 prompt。Codex 把一部分工具变成可搜索条目，模型需要时再加载。
+
+| 直接暴露 | 延迟加载 |
+|----------|----------|
+| 模型马上能调用 | 模型先用 `tool_search` 找 |
+| prompt 成本高 | prompt 成本低 |
+| 适合少量核心工具 | 适合大量插件、MCP、connector |
+| 工具列表变化会影响缓存 | 工具详情按需进入上下文 |
+
+这和 skills 的懒加载思路类似：不要把可能有用的东西一次性塞进 prompt，而是在模型表现出明确需要时再给。
+
+## Codex 和其他工具系统的比较边界
+
+| 产品 | 公开可见相似点 | Codex 源码可学点 |
+|------|----------------|------------------|
+| Claude Code | 也有 shell、文件编辑、MCP、hooks 等能力 | Codex 能看到 `ToolSpec`、router、registry、orchestrator 的完整实现 |
+| Aider | 强调 patch/diff 和 git 友好工作流 | Codex 把 patch 接入 approval、sandbox、hook、turn diff 和多前端事件 |
+| Cursor / Cline / Roo | IDE 或插件形态里也有命令、编辑、MCP | Codex 的 app-server 让工具事件和 thread/item API 更集中 |
+
+比较时要克制：闭源产品内部实现不能当事实。能写的是公开可见体验、官方资料和 Codex 源码里能确认的设计差异。
+
+## 逐段源码走读：工具清单如何出现
+
+### 1. `ToolsConfig` 收敛运行时差异
+
+`ToolsConfig` 在 `codex-rs/tools/src/tool_config.rs`。它把模型能力、feature flag、shell 类型、是否启用 apply_patch、是否启用多 agent 等信息收敛成工具构建参数。工具清单不是随便从全局配置读出来，而是每轮根据当前环境计算。
+
+| 字段或来源 | 影响 |
+|------------|------|
+| model info | 是否使用 local shell、apply_patch 形态、parallel tool call |
+| feature flags | freeform patch、web search、code mode 等 |
+| shell type | `shell`、`shell_command`、unified exec 的选择 |
+| multi-agent config | v1/v2 工具、usage hint、metadata 展示 |
+| environment | 是否允许本地工具出现在模型工具列表 |
+
+### 2. `build_tool_registry_plan` 输出两类东西
+
+`build_tool_registry_plan` 既输出 model-visible `ToolSpec`，也输出 handler 注册计划。这个双输出很重要：模型看到的是 schema，runtime 需要的是谁来执行。
+
+```mermaid
+flowchart TB
+    A["ToolRegistryPlanParams"] --> B["build_tool_registry_plan"]
+    B --> C["ConfiguredToolSpec"]
+    B --> D["ToolHandlerKind"]
+    C --> E["Responses API tools"]
+    D --> F["ToolRegistry handlers"]
+```
+
+如果只有 spec，没有 handler，模型会调用一个没人执行的工具。如果只有 handler，没有 spec，模型根本不知道工具存在。
+
+### 3. `core/src/tools/spec.rs` 做 runtime 绑定
+
+`core/src/tools/spec.rs` 把 plan 转成 `ToolRegistryBuilder`。这里能看到 apply_patch handler、dynamic tool handler、tool search handler、MCP handler 等如何注册到 registry。
+
+| handler kind | 典型执行路径 |
+|--------------|--------------|
+| apply patch | parse patch、approval、runtime apply、diff tracking |
+| dynamic tool | app-server 或 connector 提供的工具 |
+| MCP | 发送到 MCP server，处理 tool result |
+| tool search | 从 deferred MCP/dynamic entries 中返回 loadable spec |
+| agent tools | 调用子 agent runtime |
+
+### 4. `ToolRouter` 处理模型返回的多种 item
+
+Responses API 返回的 tool call 不只有普通 function call，还可能有 local shell、namespace、tool search、freeform 等形态。`ToolRouter` 的价值是把这些外部形态统一成内部 `ToolCall` 或 payload。
+
+| 外部形态 | 内部目标 |
+|----------|----------|
+| function call | 按 name 找 handler |
+| namespace MCP call | 带 server/tool 命名空间 |
+| freeform apply_patch | 转成 patch payload |
+| local shell call | 转到 shell handler |
+| tool_search | 返回 loadable tool specs |
+
+## 工具结果为什么要回到模型历史
+
+工具不是执行完就结束。模型下一步只能通过 history 看到工具结果，因此 tool output 的结构会直接影响下一轮推理。
+
+```mermaid
+sequenceDiagram
+    participant M as Model
+    participant R as Router
+    participant T as Tool runtime
+    participant H as History
+
+    M->>R: tool call
+    R->>T: internal invocation
+    T-->>R: output / error / images / diff
+    R->>H: append tool output item
+    H->>M: next sampling request
+```
+
+这也是输出截断、图片处理、MCP result 转换、apply_patch diff 事件都必须谨慎的原因。工具输出一旦写进 history，就会影响后续模型判断和压缩结果。
+
+## 自己实现时的最低安全线
+
+| 能力 | 最小安全线 |
+|------|------------|
+| shell | timeout、cwd 限制、输出上限、危险命令审批 |
+| file edit | 结构化 diff、执行前预览、按路径授权 |
+| MCP | 明确 server 来源、输出按不可信内容处理 |
+| dynamic tools | 工具名和 schema 要可审计，不允许静默覆盖内置工具 |
+| web/image | 标明外部来源，避免把网页内容提升为系统指令 |

@@ -4,7 +4,7 @@
 
 Codex 的源码入口很多，直接从 `codex-rs/Cargo.toml` 往下翻，很容易迷路。更稳的读法是先确定你要回答的问题，再沿着协议、session、turn、tools、state 这些边界追下去。
 
-当前核对的源码快照是 `openai/codex@87bc724`，提交日期 2026-04-25，提交信息为 `[codex] remove responses command (#19640)`。后续如果官方主分支变动，建议先用这一页的方法重新跑路径检查。
+当前核对的源码快照是 `openai/codex@4f1d5f00f0175e257ddc4a47746453edecb27017`，提交日期 2026-04-27，提交信息为 `Add Codex issue digest skill (#19779)`。后续如果官方主分支变动，建议先用这一页的方法重新跑路径检查。
 
 ## 源码入口
 
@@ -145,3 +145,58 @@ rg -n "thread/start|turn/start|thread/fork" codex-rs/app-server/README.md
 ## 如果自己做 Agent，可以学什么
 
 给自己的 agent 写文档时，也可以用同样方法：每个结论至少能回到一个源码路径，每个判断都写清楚它是判断。这样文档不会变成宣传稿，后续维护的人也知道从哪里继续查。
+
+## 精品版源码阅读路线
+
+对 Codex 这种 workspace，按目录顺序读很容易陷进去。更稳的方式是按问题读，每条路线都从一个用户可感知的行为出发，再落到源码。
+
+| 路线 | 用户看到的行为 | 源码切入点 | 深读目标 |
+|------|----------------|------------|----------|
+| 任务如何启动 | 输入一句话后 agent 开始工作 | `protocol.rs`、`handlers.rs`、`tasks/regular.rs` | 理解 `Submission -> SessionTask -> run_turn` |
+| 工具如何执行 | shell、patch、MCP 工具被调用 | `tool_registry_plan.rs`、`router.rs`、`registry.rs`、`orchestrator.rs` | 区分模型可见工具和 runtime handler |
+| 安全如何生效 | 命令需要审批或被 sandbox 拦住 | `exec_policy.rs`、`guardian/`、`sandboxing/`、`network_proxy_loader.rs` | 看审批、复核、沙箱、网络规则如何组合 |
+| 上下文如何变 | AGENTS、skills、hooks、memory 进入 prompt | `context/`、`turn_context.rs`、`ContextManager` | 看哪些内容是初始上下文，哪些是增量 |
+| 压缩如何继续任务 | 长会话自动 compact 后还能跑 | `turn.rs`、`compact.rs`、`compact_remote.rs` | 看 replacement history 和 reference context |
+| 多前端如何复用 | TUI、exec、app 看到同一条 thread | `app-server/`、`exec/`、`tui/` | 看事件如何映射到不同前端 |
+
+```mermaid
+flowchart LR
+    Q["问题"] --> P["协议"]
+    Q --> T["任务"]
+    Q --> C["上下文"]
+    Q --> Tools["工具"]
+    Q --> S["安全"]
+    Q --> UX["前端体验"]
+
+    P --> A["protocol.rs"]
+    T --> B["handlers.rs / tasks / turn.rs"]
+    C --> D["context/ / context_manager/"]
+    Tools --> E["tools/src / core/src/tools"]
+    S --> F["exec_policy / guardian / sandboxing"]
+    UX --> G["tui / exec / app-server"]
+```
+
+## 读源码时先确认事实类型
+
+同一句话在源码导读里可能有三种性质。写或读的时候要分清楚。
+
+| 类型 | 写法 | 验证方式 |
+|------|------|----------|
+| 源码事实 | `run_turn` 会先执行 pre-sampling compact | 用 `rg` 找函数和调用点 |
+| 官方产品事实 | `codex exec` 支持非交互运行 | 查官方 docs 或 README |
+| 工程判断 | replacement history 比普通摘要更适合继续任务 | 说明依据和取舍，不写成源码声明 |
+
+精品教程的可信度来自这层区分。源码事实要能回到路径，产品事实要能回到官方资料，工程判断要写清楚为什么成立。
+
+## 版本漂移如何处理
+
+`openai/codex` 变化很快，当前快照是 `4f1d5f00`。如果后续刷新版本，先做四件事：
+
+```bash
+git -C /tmp/openai-codex-source-current fetch --depth 1 origin main
+git -C /tmp/openai-codex-source-current rev-parse HEAD
+find /tmp/openai-codex-source-current/codex-rs -name Cargo.toml | wc -l
+rg -n "run_turn|build_tool_registry_plan|InitialContextInjection|HookEventName" /tmp/openai-codex-source-current/codex-rs
+```
+
+第一步确认快照，第二步确认 workspace 规模，第三步确认关键入口还在，第四步再改正文。不要先全局替换路径，很多 Rust 模块会移动或拆分。

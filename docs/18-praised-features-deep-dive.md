@@ -9,7 +9,7 @@
 | 问题 | 回答方式 |
 |------|----------|
 | 公开资料里反复提到 Codex 哪些亮点 | 先看官方文档、官方 README、Hacker News、技术媒体和社区文章 |
-| 这些亮点在源码里靠什么支撑 | 把每个功能映射到 `codex-rs/...` 的实际模块 |
+| 这些亮点在源码里靠什么支撑 | 把每个功能映射到 `codex-rs/` 下的实际模块 |
 | 哪些地方值得学习，哪些地方不能神化 | 把收益、代价、失败路径和适合照搬的抽象拆开 |
 
 比较 Claude Code 这类闭源工具时，只能比较公开可见的产品行为和官方文档。内部实现没有公开，不能把体验判断写成源码事实。Codex 的优势在于开源 runtime 可核对：入口、协议、工具、sandbox、compaction、review、subagent 和 app-server 都能追到代码。
@@ -565,3 +565,41 @@ rg -n "run_codex_thread_one_shot|spawn_agent|SubAgent" codex-rs/core/src/codex_d
 - [Codex CLI Context Compaction](https://codex.danielvaughan.com/2026/03/31/codex-cli-context-compaction-architecture/)：社区整理的 compaction 机制文章，关键结论仍应回源码核对。
 - [Codex CLI Review Workflows](https://codex.danielvaughan.com/2026/03/30/codex-cli-review-command-code-review-workflows/)：社区整理的 `/review` 工作流文章，适合和 `ReviewTask` 源码对照阅读。
 - [Codex CLI + Claude Code MCP workflow](https://www.jdhodges.com/blog/codex-cli-claude-code-mcp-speeds-command-line/)：把 Codex 作为 MCP 工具接入其他 agent 的社区用法。
+
+## 被称道的点如何落回源码
+
+公开讨论里，Codex 常被称道的不是单个工具，而是几个体验组合。下面只写能回到官方文档或公开源码的部分。
+
+| 被称道的点 | 源码或官方入口 | 工程解释 |
+|------------|----------------|----------|
+| 开源可审计 | `openai/codex`、Apache-2.0 | 可以核对工具、安全、压缩、扩展，不靠猜 |
+| 本地运行 | `codex-rs/README.md`、CLI docs | 命令和文件副作用在本机 runtime 里被管控 |
+| `codex exec` | `codex-rs/exec/`、Non-interactive docs | 让 agent 能进 CI、脚本和批处理 |
+| sandbox/approval | Sandbox docs、`sandboxing`、`exec_policy` | 给高权限 agent 多层边界 |
+| MCP 和 plugins | MCP/Plugins docs、`codex-mcp`、`plugin` | 把外部能力接入工具系统 |
+| context compaction | `compact.rs`、`compact_remote.rs` | 长会话通过 history replacement 继续 |
+| subagents | Subagents docs、`codex_delegate.rs` | 并行工作通过受控工具进入父 session |
+| app/IDE | app-server docs、`app-server/` | 多前端复用同一个 core runtime |
+
+```mermaid
+flowchart TB
+    Features["被称道的体验"] --> Open["开源可核对"]
+    Features --> Local["本地 runtime"]
+    Features --> Safe["sandbox + approval"]
+    Features --> Context["compact + memory"]
+    Features --> Ext["MCP + plugins + hooks"]
+    Features --> Multi["app-server + subagents"]
+```
+
+## 不该过度宣传的边界
+
+精品教程不应该把体验感写成确定事实。比如“比某产品压缩更好”只能写成用户体验或公开资料层面的观察；如果要解释 Codex 为什么稳，必须回到源码里能确认的机制：reference context、replacement history、remote compact filtering、rollout reconstruction、memory pipeline。
+
+| 可以写 | 不该写 |
+|--------|--------|
+| Codex 源码能确认 mid-turn compact 会特殊处理 initial context | Codex 一定比某闭源产品内部实现先进 |
+| 官方文档说明 Codex 支持 sandbox 和 approval | sandbox 能保证绝对安全 |
+| 社区讨论称赞开源、本地、MCP、exec | 社区讨论等于普遍结论 |
+| app-server 源码显示多前端 API | 所有 Codex 产品形态都完全等同于 CLI runtime |
+
+这也是 reference 页要单独存在的原因：资料来源、可信度和可支撑的判断必须分开。

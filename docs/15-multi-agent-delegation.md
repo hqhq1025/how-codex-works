@@ -315,3 +315,52 @@ rg -n "spawn_agent|wait_agent|send_input|close_agent" codex-rs/tools/src/agent_t
 ```
 
 如果只读一段，优先读 `forward_events`。它最能说明 Codex 子 agent 的安全边界。
+
+## current main 的多 agent 模块更细
+
+当前快照里，多 agent 不只是 `codex_delegate.rs`。`core/src/agent/` 下已经有 registry、mailbox、role、status、control 等模块；工具 handler 也拆成 `multi_agents_common`、v1/v2 和测试。读的时候可以按两条线走。
+
+| 线 | 源码 | 关注点 |
+|----|------|--------|
+| runtime 线 | `core/src/codex_delegate.rs`、`core/src/agent/` | 子 thread 如何启动、事件如何转发、状态如何管理 |
+| tool 线 | `tools/src/agent_tool.rs`、`core/src/tools/handlers/multi_agents_*` | 模型看到的 spawn/wait/send/close 工具如何映射到 runtime |
+
+```mermaid
+flowchart TB
+    A["parent model calls spawn_agent"] --> B["Tool handler validates input"]
+    B --> C["codex_delegate"]
+    C --> D["child session / thread"]
+    D --> E["child run_turn"]
+    E --> F["child events"]
+    F --> G["event bridge"]
+    G --> H["parent visible result / status"]
+    H --> I["wait_agent / send_message / close_agent"]
+```
+
+## 子 agent 是受控工具
+
+Codex 的设计重点不是“让模型随便开很多 agent”，而是把子 agent 当成一种有生命周期的工具。
+
+| 约束 | 目的 |
+|------|------|
+| spawn 参数校验 | 防止空任务、冲突字段、非法 role/model override |
+| depth limit | 防止递归委托失控 |
+| approval policy 继承或重设 | 子 agent 不能偷偷越权 |
+| runtime sandbox reapply | role 配置不能绕过当前安全边界 |
+| event bridge | 子 agent 进度要能回到父线程或 UI |
+| wait/close | 父 agent 需要明确管理后台任务 |
+
+这和“多 agent swarm”式设计不同。Codex 更偏受控委托：适合把探索、验证、独立子任务并行出去，但父线程仍然是协调和安全边界。
+
+## 和 Worktree 的关系
+
+Codex app 公开文档里强调 worktree 和 handoff，源码里的子 agent 工具则强调 session/thread/runtime 控制。两者可以配合，但不是同一层概念。
+
+| 层 | 解决的问题 |
+|----|------------|
+| worktree | 文件系统隔离，减少并行修改冲突 |
+| subagent tool | 任务委托和事件桥接 |
+| approval/sandbox | 子任务副作用控制 |
+| app-server thread API | 前端如何展示和管理多线程 |
+
+最小 agent 不建议一开始做多 agent。先把单 agent 的工具、安全、上下文和事件做好，再加只读 explorer；等文件冲突和任务协调变成真实痛点，再引入 worktree 或 mailbox。

@@ -149,3 +149,75 @@ Codex 的安全系统比很多 CLI agent 重。它增加了代码量、平台分
 只要 agent 能执行 shell，就不要把安全写成提示词里的禁止事项。至少需要三层：审批策略、命令执行隔离、输出和超时控制。
 
 如果暂时做不到三平台原生沙箱，也可以先从最小硬边界开始：限定 cwd、默认禁止网络、命令超时、输出上限、写操作必须人工确认。后续再把规则收敛到统一 orchestrator。
+
+## 安全链路按副作用类型分层
+
+Codex 不是只有一个“允许/拒绝”开关。不同副作用走不同边界。
+
+| 副作用 | 主要入口 | 关键边界 |
+|--------|----------|----------|
+| 执行命令 | `core/src/exec.rs`、unified exec runtime | approval、exec policy、sandbox、输出上限、超时 |
+| 修改文件 | `apply_patch` runtime | patch grammar、路径集合审批、TurnDiffTracker |
+| 访问网络 | network proxy 和 network policy | 规则匹配、approval、代理层拦截 |
+| 调 MCP | MCP tool handler | MCP server 配置、tool approval、输出转换 |
+| hook 阻断 | `hook_runtime.rs` | hook 输出协议、block reason、additional context |
+
+```mermaid
+flowchart TB
+    A["ToolCall"] --> B["PreToolUse hooks"]
+    B --> C{"blocked?"}
+    C -->|yes| Z["return rejected output"]
+    C -->|no| D["permission / approval policy"]
+    D --> E{"needs approval?"}
+    E -->|yes| F["user / Guardian / PermissionRequest hooks"]
+    E -->|no| G["sandbox selection"]
+    F --> G
+    G --> H["runtime executes"]
+    H --> I["PostToolUse hooks"]
+    I --> J["tool output to history"]
+```
+
+这条链路的关键点是 fail closed。任何一层看不懂、无法确认或返回不合法结果，都不能默认放行真实副作用。
+
+## Guardian 和用户审批的关系
+
+Guardian 可以看成审批链上的自动 reviewer，而不是 sandbox 的替代品。sandbox 限制进程能做什么，Guardian 和 approval policy 决定某个动作是否应该被允许。两者解决的问题不同。
+
+| 机制 | 判断对象 | 典型问题 |
+|------|----------|----------|
+| approval policy | 当前模式下是否需要问用户 | `never`、`on-request`、`on-failure` 等策略 |
+| Guardian | 命令或操作是否风险过高 | 自动复核危险命令、网络或文件副作用 |
+| sandbox | 即使允许执行，也限制进程边界 | cwd、写权限、网络、平台隔离 |
+| exec policy | 命令结构和策略约束 | 某些命令模式是否可运行 |
+
+这也解释了为什么“用户批准一次”不等于后续所有命令都安全。审批是动作级或前缀级的，sandbox 是执行环境级的。
+
+## Sandbox retry 为什么存在
+
+Codex 的工具执行有时会先在受限 sandbox 中尝试，失败后再根据策略请求更高权限或更宽边界。这不是为了绕过 sandbox，而是把最小权限作为默认路径。
+
+```mermaid
+stateDiagram-v2
+    [*] --> TrySandbox
+    TrySandbox --> Success: command exits ok
+    TrySandbox --> SandboxDenied: denied by sandbox
+    SandboxDenied --> AskApproval: policy allows escalation
+    AskApproval --> RetryUnsandboxed: approved
+    AskApproval --> Rejected: denied
+    RetryUnsandboxed --> Success
+    RetryUnsandboxed --> RuntimeError
+    Rejected --> [*]
+    Success --> [*]
+    RuntimeError --> [*]
+```
+
+如果自己做 agent，可以先做“只允许工作区写入 + 默认无网络 + 超时输出截断”。等工具数量变多，再把 retry、per-command approval 和 network proxy 拆出来。
+
+## 可核对命令
+
+```bash
+rg -n "AskForApproval|approval|Guardian|approvals_reviewer" codex-rs/core/src
+rg -n "Sandbox|sandbox|landlock|seatbelt|windows" codex-rs/core/src codex-rs/sandboxing codex-rs/linux-sandbox codex-rs/windows-sandbox-rs
+rg -n "network_policy|NetworkPolicy|network proxy|request_network" codex-rs/core/src codex-rs/network-proxy
+rg -n "run_pre_tool_use_hooks|run_permission_request_hooks|run_post_tool_use_hooks" codex-rs/core/src/hook_runtime.rs
+```

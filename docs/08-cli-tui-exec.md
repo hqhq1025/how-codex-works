@@ -219,3 +219,37 @@ Codex 没有把 `exec` 做成 TUI 的脚本模式，而是通过 app-server prot
 交互式 CLI 和自动化 CLI 是两种产品，不要让它们共用同一套输出假设。TUI 可以有动画、审批弹窗和状态栏；exec 应该输出稳定、可解析、可脚本化的结果。
 
 核心 agent 不应该知道自己是在 TUI 还是 CI 里。它只发事件。入口层决定怎么展示、怎么拒绝不支持的交互、怎么退出。
+
+## 三种入口共用同一条核心路径
+
+`codex`、`codex exec`、app/IDE 入口的体验不同，但都要把外部输入转成 core 能处理的 turn。
+
+| 入口 | 用户意图 | 关键差异 |
+|------|----------|----------|
+| TUI | 人在终端里持续协作 | 需要实时渲染、审批 UI、键盘中断、滚动历史 |
+| `codex exec` | 脚本或 CI 自动跑完任务 | 需要明确退出码、stdout/stderr、JSONL/human 输出 |
+| app-server | 桌面、IDE、浏览器等前端 | 需要 thread/turn/item API、文件监听、插件和动态工具 |
+
+```mermaid
+flowchart LR
+    CLI["codex CLI"] --> TUI["tui"]
+    CLI --> Exec["exec"]
+    App["Desktop / IDE"] --> AppServer["app-server"]
+    TUI --> Core["codex-core"]
+    Exec --> Core
+    AppServer --> Core
+```
+
+## headless 模式为什么不是缩水版
+
+`codex exec` 没有交互式 UI，但它不是少一半能力。它要把自动化场景里的边界讲清楚：没有用户随时批准时，审批策略怎么处理；输出给人看还是给机器看；任务失败时退出码怎么表达；是否持久化 rollout。
+
+| 问题 | headless 要求 |
+|------|---------------|
+| 输入 | prompt 参数和 stdin 要有明确合并规则 |
+| 输出 | human 和 JSONL 两种消费者都能处理 |
+| 审批 | 不能卡在需要人工确认的 UI 上 |
+| 状态 | ephemeral 与持久 rollout 要可选 |
+| 失败 | 脚本需要可靠退出码 |
+
+如果自己做 agent，`exec` 模式应该从第一版就单独测试。很多 CLI agent 在交互模式看起来可用，一进 CI 就暴露审批、输出和退出码问题。

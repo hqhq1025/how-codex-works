@@ -388,3 +388,65 @@ rg -n "continuation.md|budget_limit.md" codex-rs/core/templates/goals codex-rs/c
 ```
 
 如果要追完整任务生命周期，先读 `Session::start_task`，再读 `RegularTask::run`，最后回到 `run_turn`。
+
+## SessionTask 是任务边界
+
+Codex 把普通对话、review、compact、undo、user shell 等都放进 task 模型里，不是把它们写成 UI 命令回调。
+
+| task | 入口 | 作用 |
+|------|------|------|
+| regular | `Op::UserTurn` | 正常 agent loop |
+| review | `/review` 或相关 app-server API | 代码审查任务 |
+| compact | `Op::Compact` 或 app-server compact start | 压缩 history |
+| undo | undo task | 回滚或恢复历史 |
+| user shell | 用户直接执行 shell | 把用户 shell 命令纳入事件和状态 |
+
+```mermaid
+flowchart TB
+    A["Op"] --> B["Session::start_task"]
+    B --> C{"Task kind"}
+    C -->|regular| D["RegularTask::run -> run_turn"]
+    C -->|review| E["ReviewTask"]
+    C -->|compact| F["CompactTask"]
+    C -->|undo| G["UndoTask"]
+    C -->|user shell| H["UserShellTask"]
+    D --> I["EventMsg + history"]
+    E --> I
+    F --> I
+    G --> I
+    H --> I
+```
+
+这让所有长动作都能共享中断、事件、history、rollout 和前端展示。比如 compact 不是后台偷偷改数组，它也是一类 turn/task，有事件、有 replacement history、有失败反馈。
+
+## review 和 goals 的区别
+
+`ReviewTask` 处理的是“让模型审查代码”这类明确任务；goals 更像长任务控制层，用于预算、继续、idle 后是否自动推进等。两者都和普通 agent loop 有关，但层级不同。
+
+| 机制 | 更像什么 | 典型源码 |
+|------|----------|----------|
+| `ReviewTask` | 一种任务类型 | `core/src/tasks/review.rs`、`session/review.rs` |
+| `GoalRuntimeState` | 长程目标状态机 | `core/src/goals.rs` |
+| goal templates | 继续/预算提示 | `core/templates/goals/` |
+| plan tool | UI 协作状态 | `tools/src/plan_tool.rs` |
+
+## Stop hook 和 task lifecycle 的关系
+
+Stop hook 可以在模型准备结束时要求继续，比如提示模型先跑测试或补验证。这类能力如果只做成 UI 提醒，很容易被忽略；放进 task lifecycle 后，它能变成后续模型输入。
+
+```mermaid
+stateDiagram-v2
+    [*] --> Running
+    Running --> ModelDone
+    ModelDone --> StopHook
+    StopHook --> Continue: block with reason
+    Continue --> Running
+    StopHook --> Complete: allow
+    Running --> Interrupted
+    Running --> Error
+    Complete --> [*]
+    Interrupted --> [*]
+    Error --> [*]
+```
+
+这也是 Codex 比普通 while loop 多一层 task 的原因：任务结束本身也可能被扩展点影响。

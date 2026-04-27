@@ -4,7 +4,7 @@
 
 资料使用原则很简单：产品定位和公开功能以官方文档为准；实现机制以 `openai/codex` 公开源码为准；社区文章用于补充使用场景、体验评价和问题意识；闭源工具的内部机制不写成事实。
 
-本版源码核对快照是 `openai/codex@87bc724`，提交日期 2026-04-25，提交信息为 `[codex] remove responses command (#19640)`。
+本版源码核对快照是 `openai/codex@4f1d5f00f0175e257ddc4a47746453edecb27017`，提交日期 2026-04-27，提交信息为 `Add Codex issue digest skill (#19779)`。
 
 ## 项目形态参考
 
@@ -26,7 +26,7 @@
 | 资料 | 用在导读里的位置 | 作用 |
 |------|------------------|------|
 | [openai/codex](https://github.com/openai/codex) | 全文 | 官方仓库，确认开源许可证、目录结构、README、Rust workspace 和源码快照 |
-| [openai/codex@87bc724](https://github.com/openai/codex/tree/87bc72408c5ef08f8d21f2cdd00c55451c3be33f) | 全文 | 固定源码核对版本，避免主分支变化导致章节漂移 |
+| [openai/codex@4f1d5f00](https://github.com/openai/codex/tree/4f1d5f00f0175e257ddc4a47746453edecb27017) | 全文 | 固定源码核对版本，避免主分支变化导致章节漂移 |
 | [README.md](https://github.com/openai/codex/blob/main/README.md) | 首页、01、08、11、18 | 确认 Codex CLI 本地运行、IDE、desktop app、Codex Web 的边界 |
 | [codex-rs/README.md](https://github.com/openai/codex/blob/main/codex-rs/README.md) | 01、08、18 | 确认 Rust CLI 是维护主线，以及 MCP、`codex exec`、sandbox 等 Rust CLI 能力 |
 | [codex-rs/docs/protocol_v1.md](https://github.com/openai/codex/blob/main/codex-rs/docs/protocol_v1.md) | 02、03、07、08、11 | 确认 queue-pair、Session、Task、Turn 的官方术语 |
@@ -86,11 +86,11 @@
 | 章节 | 主要资料来源 |
 |------|--------------|
 | 首页、00、01 | 官方 README、`codex-rs/README.md`、`protocol_v1.md`、源码快照 |
-| 02 Agent Loop | `session/handlers.rs`、`session/turn.rs`、`protocol_v1.md`、社区 agent loop 笔记 |
+| 02 Agent Loop | `session/handlers.rs`、`tasks/regular.rs`、`session/turn.rs`、`protocol_v1.md`、社区 agent loop 笔记 |
 | 03 协议层 | `protocol.rs`、`protocol_v1.md`、app-server README |
-| 04、19 工具系统与工具图鉴 | `tools/spec.rs`、`tool_registry_plan.rs`、`router.rs`、`registry.rs`、`orchestrator.rs`、MCP 官方文档、公开可见竞品工具体验 |
+| 04、19 工具系统与工具图鉴 | `tools/src/tool_registry_plan.rs`、`core/src/tools/spec.rs`、`router.rs`、`registry.rs`、`orchestrator.rs`、MCP 官方文档、公开可见竞品工具体验 |
 | 05 Sandbox 与安全 | Sandbox 官方文档、`sandboxing`、`guardian`、`network-proxy`、exec policy |
-| 06、17 上下文压缩 | `compact.rs`、`compact_remote.rs`、`turn.rs`、compaction 社区文章 |
+| 06、17 上下文压缩 | `compact.rs`、`compact_remote.rs`、`turn.rs`、`context_manager/`、`memories/README.md`、compaction 社区文章 |
 | 07 MCP 与 App Server | app-server README、MCP 官方文档、`mcp-server`、`codex-mcp` |
 | 08 CLI、TUI 与 Exec | CLI features、Non-interactive mode、`exec/src/lib.rs`、TUI 源码 |
 | 09、13、14 定制与注入 | config 文档、Skills、Plugins、Hooks、`AGENTS.md`、context fragments |
@@ -99,6 +99,7 @@
 | 12 apply_patch | `apply_patch.rs`、`turn_diff_tracker.rs`、协议事件 |
 | 15 多 Agent | Subagents 官方文档、`codex_delegate.rs`、`agent_tool.rs` |
 | 16 Task、Review 与 Goals | `tasks/`、`goals.rs`、review 官方与社区资料 |
+| 20 源码走读工作簿 | 01-19 章源码结论、`protocol_v1.md`、`turn.rs`、`tool_registry_plan.rs`、`compact.rs`、`memories/README.md` |
 
 ## 未采用或谨慎采用的资料
 

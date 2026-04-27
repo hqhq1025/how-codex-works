@@ -166,3 +166,28 @@ Codex 选择了更复杂的 runtime。它的源码不像小型 agent demo 那样
 不要只学 Codex 的功能列表，更应该学它的分层方式。先问每个能力属于哪一层：协议、thread、工具、安全、上下文、扩展、前端。层次清楚之后，加功能才不会把 agent loop 变成一团回调。
 
 一个更实用的学习顺序是：先做 `Submission/Event`，再做 `Thread/Turn/Item`，然后做统一工具管道和事件日志，最后再加 skills、MCP、plugins、hooks、memory 和 sub-agent。Codex 值得读，是因为它把这些后续问题都摆在了源码里。
+
+## 用户体验来自工程边界
+
+Codex 用起来不一样，不只是模型更强。很多体验来自工程边界。
+
+| 体验 | 背后的边界 |
+|------|------------|
+| 长任务能继续 | task lifecycle、follow-up、compact、rollout |
+| 工具调用可解释 | EventMsg、tool item、diff、approval request |
+| 自动化可用 | `codex exec`、headless output、ephemeral session |
+| 多前端一致 | protocol queue、app-server、thread/turn/item API |
+| 扩展不失控 | MCP、dynamic tools、hooks、plugins 各有边界 |
+| 安全感更强 | approval、sandbox、Guardian、network policy 叠加 |
+
+```mermaid
+flowchart TB
+    UX["使用感"] --> Protocol["协议事件粒度"]
+    UX --> Context["上下文状态管理"]
+    UX --> Tools["工具副作用控制"]
+    UX --> Safety["安全边界"]
+    UX --> Persistence["rollout / state"]
+    UX --> Ext["扩展生命周期"]
+```
+
+如果只看模型回复，很难解释这些差异。读源码时要看模型前后的系统：它怎么知道当前 cwd、怎么记录工具结果、怎么在压缩后继续、怎么把事件给 UI、怎么阻止危险命令。

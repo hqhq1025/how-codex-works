@@ -245,3 +245,40 @@ Codex 的定制入口很多，初学者会觉得散。配置、AGENTS.md、skill
 不要只有一个巨大 system prompt。把规则按生命周期分层：永久规则放 base instructions，项目规则放仓库文件，专题规则做成 skill，外部流程用 hook，外部工具通过 MCP 或 plugin 接入。
 
 这样做的好处是可维护。某个任务需要安全审计时加载安全规则，不需要让每次改 CSS 的任务都背着安全审计手册。
+
+## 定制入口按生命周期分层
+
+Codex 的定制能力很多，但可以按生命周期分清楚。
+
+| 生命周期 | 定制入口 | 进入 runtime 的位置 |
+|----------|----------|--------------------|
+| 启动前 | `config.toml`、managed config | session configuration、tools config、sandbox、model |
+| 项目发现 | `AGENTS.md`、project hooks | context fragments、hook registry |
+| 模型前 | skills、plugins、apps instructions | developer/context messages |
+| 工具前后 | hooks、approval、exec policy | tool runtime 和 orchestrator |
+| 会话后台 | memory pipeline、state DB | future sessions 的 context 来源 |
+
+```mermaid
+flowchart TB
+    Config["config.toml"] --> Session["Session configuration"]
+    Agents["AGENTS.md"] --> Context["Context fragments"]
+    Skills["skills"] --> Context
+    Plugins["plugins"] --> Context
+    Apps["apps/connectors"] --> Tools["Dynamic tools / mentions"]
+    Hooks["hooks"] --> Runtime["Tool and turn lifecycle"]
+    Memory["memories"] --> Future["future startup context"]
+```
+
+## 为什么不要都塞进 prompt
+
+配置、项目规则、skill、plugin、hook、MCP 都能影响模型行为，但它们不应该都变成一大段系统提示词。prompt 适合告诉模型怎么做，工具适合给模型一种能力，hook 适合在生命周期边界拦截，配置适合改变 runtime 策略。
+
+| 想做的事 | 更适合的入口 |
+|----------|--------------|
+| 告诉模型项目测试命令 | `AGENTS.md` 或 skill |
+| 给模型一个查数据库工具 | MCP 或 dynamic tool |
+| 禁止某类 shell 命令 | exec policy 或 PreToolUse hook |
+| 工具执行后自动跑检查 | PostToolUse 或 Stop hook |
+| 团队统一 sandbox/approval | managed config |
+
+这是 Codex 定制系统最值得学的地方：扩展不是只有 prompt engineering，很多需求应该落在 runtime 边界上。
